@@ -6,6 +6,7 @@ class ActionType(Enum):
     BUILD_ROAD = auto()
     BUILD_SETTLEMENT = auto()
     END_TURN = auto()
+    PASS = auto()
 
 
 @dataclass(frozen=True)
