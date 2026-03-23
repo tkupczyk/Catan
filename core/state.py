@@ -172,6 +172,16 @@ class GameState:
             hex_id = action.target
             if hex_id is not None and rules.can_move_robber(self, hex_id):
                 self.robber_hex = hex_id
+
+                candidates = [
+                    pid for pid in self._players_touching_hex(hex_id)
+                    if pid != self.current_player
+                ]
+
+                if candidates:
+                    victim_id = candidates[0]
+                    self._steal_one_resource(victim_id)
+
                 self.phase = "MAIN"
             return
 
@@ -257,6 +267,42 @@ class GameState:
                 continue
 
             player.resources[resource] += 1
+
+
+    def _players_touching_hex(self, hex_id: int) -> list[int]:
+        """
+        Zwraca listę ID graczy, którzy mają osadę lub miasto
+        na dowolnym wierzchołku danego heksa.
+        """
+        touched_vertices = set(self.board.hex_vertices[hex_id])
+        result = []
+
+        for player_id, player in enumerate(self.players):
+            if any(v in touched_vertices for v in player.settlements) or \
+               any(v in touched_vertices for v in player.cities):
+                result.append(player_id)
+
+        return result
+
+    def _steal_one_resource(self, victim_id: int) -> None:
+        """
+        Bieżący gracz kradnie 1 losowy surowiec od victim_id,
+        jeśli ofiara ma jakiekolwiek zasoby.
+        """
+        thief = self.players[self.current_player]
+        victim = self.players[victim_id]
+
+        available = []
+        for resource, amount in victim.resources.items():
+            if amount > 0:
+                available.append(resource)
+
+        if not available:
+            return
+
+        stolen_resource = random.choice(available)
+        victim.resources[stolen_resource] -= 1
+        thief.resources[stolen_resource] += 1
 
     def produce_resources(self, dice_roll: int) -> None:
         """

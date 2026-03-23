@@ -69,7 +69,12 @@ def action_priority(action: Action) -> int:
     return 1
 
 
-def weighted_action_choice(actions: list[Action]) -> Action:
+def weighted_action_choice(actions: list[Action], state=None, root_player_id: int | None = None) -> Action:
+    if state is not None and root_player_id is not None:
+        robber_actions = [a for a in actions if a.type == ActionType.MOVE_ROBBER]
+        if robber_actions:
+            return choose_robber_action(actions, state, root_player_id)
+
     weighted = []
     for action in actions:
         w = action_priority(action)
@@ -94,6 +99,67 @@ def vertex_hexes(board, vertex: int) -> list[int]:
             result.append(hex_id)
     return result
 
+def players_touching_hex(state, hex_id: int) -> list[int]:
+    touched_vertices = set(state.board.hex_vertices[hex_id])
+    result = []
+
+    for player_id, player in enumerate(state.players):
+        if any(v in touched_vertices for v in player.settlements) or \
+           any(v in touched_vertices for v in player.cities):
+            result.append(player_id)
+
+    return result
+
+
+def robber_hex_score(state, hex_id: int, root_player_id: int) -> float:
+    """
+    Ocena heksa pod ruch złodzieja.
+    Chcemy:
+    - blokować przeciwnika
+    - kraść, jeśli się da
+    - unikać blokowania siebie
+    """
+    if hex_id == state.robber_hex:
+        return -999.0
+
+    score = 0.0
+    opp_id = 1 - root_player_id
+
+    touched = players_touching_hex(state, hex_id)
+    resource = state.board.hex_resources[hex_id]
+    number = state.board.hex_numbers[hex_id]
+
+    # Dobry numer = lepszy cel blokady
+    score += 2.0 * DICE_WEIGHT[number]
+
+    # Jeśli dotykamy przeciwnika, to duży plus
+    if opp_id in touched:
+        score += 8.0
+
+        opp = state.players[opp_id]
+        if sum(opp.resources.values()) > 0:
+            score += 5.0  # szansa kradzieży
+
+    # Jeśli dotykamy siebie, to minus
+    if root_player_id in touched:
+        score -= 6.0
+
+    # Pustynia jako cel zwykle ma mało sensu
+    if resource == HexResource.DESERT:
+        score -= 3.0
+
+    return score
+
+def choose_robber_action(actions: list[Action], state, root_player_id: int) -> Action:
+    robber_actions = [a for a in actions if a.type == ActionType.MOVE_ROBBER]
+    if not robber_actions:
+        return weighted_action_choice(actions)
+
+    best_action = max(
+        robber_actions,
+        key=lambda a: robber_hex_score(state, a.target, root_player_id)
+    )
+    return best_action
 
 def vertex_production_score(state, vertex: int) -> float:
     """
@@ -255,7 +321,7 @@ def rollout(state, root_player_id: int, max_depth: int = 90) -> float:
         if not actions:
             break
 
-        action = weighted_action_choice(actions)
+        action = weighted_action_choice(actions, current_state, root_player_id)
         current_state = current_state.apply(action)
         depth += 1
 
@@ -291,7 +357,7 @@ def mcts_search(root_state, player_id: int, iterations: int = 300, exploration: 
 
         # 2. Expansion
         if not state.is_terminal() and node.untried_actions:
-            action = weighted_action_choice(node.untried_actions)
+            action = weighted_action_choice(node.untried_actions, state, player_id)
             node.untried_actions.remove(action)
 
             next_state = state.apply(action)
