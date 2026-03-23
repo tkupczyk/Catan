@@ -7,6 +7,21 @@ from core.actions import Action, ActionType
 from core.board import HexResource
 
 
+DICE_WEIGHT = {
+    None: 0,
+    2: 1,
+    3: 2,
+    4: 3,
+    5: 4,
+    6: 5,
+    8: 5,
+    9: 4,
+    10: 3,
+    11: 2,
+    12: 1,
+}
+
+
 @dataclass
 class Node:
     state: object
@@ -38,13 +53,13 @@ class Node:
 
 def action_priority(action: Action) -> int:
     if action.type == ActionType.BUILD_CITY:
-        return 100
+        return 120
     if action.type == ActionType.BUILD_SETTLEMENT:
-        return 90
+        return 100
     if action.type == ActionType.TRADE_BANK:
-        return 70
+        return 75
     if action.type == ActionType.BUILD_ROAD:
-        return 50
+        return 55
     if action.type == ActionType.ROLL_DICE:
         return 40
     if action.type == ActionType.MOVE_ROBBER:
@@ -72,6 +87,115 @@ def weighted_action_choice(actions: list[Action]) -> Action:
     return weighted[-1][0]
 
 
+def vertex_hexes(board, vertex: int) -> list[int]:
+    result = []
+    for hex_id, verts in enumerate(board.hex_vertices):
+        if vertex in verts:
+            result.append(hex_id)
+    return result
+
+
+def vertex_production_score(state, vertex: int) -> float:
+    """
+    Jak dobre jest miejsce pod osadę/miasto.
+    """
+    score = 0.0
+    distinct_resources = set()
+
+    for hex_id in vertex_hexes(state.board, vertex):
+        if hex_id == state.robber_hex:
+            continue
+
+        resource = state.board.hex_resources[hex_id]
+        number = state.board.hex_numbers[hex_id]
+
+        if resource == HexResource.DESERT:
+            continue
+
+        distinct_resources.add(resource)
+        score += DICE_WEIGHT[number]
+
+        if resource == HexResource.LUMBER:
+            score += 2.0
+        elif resource == HexResource.BRICK:
+            score += 1.8
+        elif resource == HexResource.GRAIN:
+            score += 1.4
+        elif resource == HexResource.ORE:
+            score += 1.4
+        elif resource == HexResource.WOOL:
+            score += 1.0
+
+    score += 1.2 * len(distinct_resources)
+    return score
+
+
+def controlled_production_score(state, player_id: int) -> float:
+    """
+    Suma jakości pól kontrolowanych przez gracza.
+    Osada liczy się x1, miasto x2.
+    """
+    player = state.players[player_id]
+    score = 0.0
+
+    for vertex in player.settlements:
+        score += vertex_production_score(state, vertex)
+
+    for vertex in player.cities:
+        score += 2.0 * vertex_production_score(state, vertex)
+
+    return score
+
+
+def open_settlement_spots_score(state, player_id: int) -> float:
+    """
+    Szacujemy, ile dobrych miejsc pod osadę gracz ma już 'otwartych' przez drogi.
+    """
+    player = state.players[player_id]
+    score = 0.0
+
+    for vertex in range(len(state.board.vertex_positions)):
+        if vertex in state.occupied_vertices:
+            continue
+
+        # zasada odległości
+        blocked = False
+        for n in state.board.vertex_neighbors[vertex]:
+            if n in state.occupied_vertices:
+                blocked = True
+                break
+        if blocked:
+            continue
+
+        # czy dotyka drogi gracza
+        connected = False
+        for edge_id in state.board.vertex_edges[vertex]:
+            if edge_id in player.roads:
+                connected = True
+                break
+
+        if connected:
+            score += 0.5 * vertex_production_score(state, vertex)
+
+    return score
+
+
+def build_readiness_score(player) -> float:
+    """
+    Premia za bycie blisko kosztów budowy.
+    """
+    brick = player.resources[HexResource.BRICK]
+    lumber = player.resources[HexResource.LUMBER]
+    wool = player.resources[HexResource.WOOL]
+    grain = player.resources[HexResource.GRAIN]
+    ore = player.resources[HexResource.ORE]
+
+    settlement_ready = min(brick, 1) + min(lumber, 1) + min(wool, 1) + min(grain, 1)
+    city_ready = min(grain, 2) + min(ore, 3)
+
+    return 1.2 * settlement_ready + 1.0 * city_ready
+
+
 def evaluate_state(state, root_player_id: int) -> float:
     """
     Heurystyczna ocena stanu z perspektywy root_player_id.
@@ -96,22 +220,33 @@ def evaluate_state(state, root_player_id: int) -> float:
     my_cities = len(me.cities)
     opp_cities = len(opp.cities)
 
-    score = 0.0
-    score += 10.0 * (my_vp - opp_vp)
-    score += 2.5 * (my_cities - opp_cities)
-    score += 1.5 * (my_settlements - opp_settlements)
-    score += 0.3 * (my_resources - opp_resources)
-    score += 0.15 * (my_roads - opp_roads)
+    my_prod = controlled_production_score(state, root_player_id)
+    opp_prod = controlled_production_score(state, opp_id)
 
-    # mapowanie na 0..1
-    return 1.0 / (1.0 + math.exp(-score / 5.0))
+    my_open_spots = open_settlement_spots_score(state, root_player_id)
+    opp_open_spots = open_settlement_spots_score(state, opp_id)
+
+    my_ready = build_readiness_score(me)
+    opp_ready = build_readiness_score(opp)
+
+    score = 0.0
+    score += 12.0 * (my_vp - opp_vp)
+    score += 3.0 * (my_cities - opp_cities)
+    score += 2.0 * (my_settlements - opp_settlements)
+    score += 0.2 * (my_resources - opp_resources)
+    score += 0.1 * (my_roads - opp_roads)
+    score += 0.35 * (my_prod - opp_prod)
+    score += 0.20 * (my_open_spots - opp_open_spots)
+    score += 0.35 * (my_ready - opp_ready)
+
+    return 1.0 / (1.0 + math.exp(-score / 6.0))
 
 
 def select_child(node: Node, exploration: float) -> Node:
     return max(node.children.values(), key=lambda child: child.uct_score(exploration))
 
 
-def rollout(state, root_player_id: int, max_depth: int = 80) -> float:
+def rollout(state, root_player_id: int, max_depth: int = 90) -> float:
     current_state = state
     depth = 0
 
