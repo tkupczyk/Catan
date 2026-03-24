@@ -1,0 +1,326 @@
+import math
+import pygame
+from core.actions import Action, ActionType
+from core.board import HexResource
+
+
+BACKGROUND = (245, 240, 220)
+EDGE_COLOR = (80, 80, 80)
+VERTEX_COLOR = (120, 120, 120)
+TEXT_COLOR = (20, 20, 20)
+ROBBER_COLOR = (30, 30, 30)
+
+
+PLAYER_COLORS = [
+    (200, 50, 50),   # gracz 0
+    (50, 90, 200),   # gracz 1
+    (50, 160, 80),   # zapas
+    (180, 120, 30),  # zapas
+]
+
+
+HEX_COLORS = {
+    HexResource.BRICK: (178, 92, 70),
+    HexResource.LUMBER: (70, 140, 80),
+    HexResource.WOOL: (150, 200, 120),
+    HexResource.GRAIN: (220, 200, 90),
+    HexResource.ORE: (130, 130, 140),
+    HexResource.DESERT: (220, 195, 140),
+}
+
+
+class PygameView:
+    def __init__(self, width: int = 1400, height: int = 1000):
+        pygame.init()
+        pygame.font.init()
+
+        self.width = width
+        self.height = height
+        self.screen = pygame.display.set_mode((width, height))
+        pygame.display.set_caption("Catan - Debug View")
+
+        self.font_small = pygame.font.SysFont("arial", 18)
+        self.font_medium = pygame.font.SysFont("arial", 24, bold=True)
+        self.font_large = pygame.font.SysFont("arial", 30, bold=True)
+
+        self.clock = pygame.time.Clock()
+
+    def get_clicked_hex(self, state, mouse_pos, radius=45):
+        mx, my = mouse_pos
+
+        for hex_id, center in enumerate(state.board.hex_centers):
+            sx, sy = self.world_to_screen(center)
+            dist_sq = (sx - mx) ** 2 + (sy - my) ** 2
+
+            if dist_sq <= radius ** 2:
+                return hex_id
+
+        return None
+
+    def get_clicked_vertex(self, state, mouse_pos, radius=12):
+        mx, my = mouse_pos
+
+        for vertex_id, pos in enumerate(state.board.vertex_positions):
+            sx, sy = self.world_to_screen(pos)
+            dist_sq = (sx - mx) ** 2 + (sy - my) ** 2
+
+            if dist_sq <= radius ** 2:
+                return vertex_id
+
+        return None
+
+    def point_line_distance(self, p, a, b):
+        # odległość punktu p od odcinka ab
+        px, py = p
+        ax, ay = a
+        bx, by = b
+
+        dx = bx - ax
+        dy = by - ay
+
+        if dx == 0 and dy == 0:
+            return math.hypot(px - ax, py - ay)
+
+        t = ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)
+        t = max(0, min(1, t))
+
+        proj_x = ax + t * dx
+        proj_y = ay + t * dy
+
+        return math.hypot(px - proj_x, py - proj_y)
+
+
+    def get_clicked_edge(self, state, mouse_pos, threshold=8):
+        mx, my = mouse_pos
+
+        for edge_id, (a, b) in enumerate(state.board.edges):
+            pa = self.world_to_screen(state.board.vertex_positions[a])
+            pb = self.world_to_screen(state.board.vertex_positions[b])
+
+            dist = self.point_line_distance((mx, my), pa, pb)
+
+            if dist <= threshold:
+                return edge_id
+
+        return None
+
+    def handle_click(self, state, mouse_pos):
+        print("handle_click called")
+
+        # 1. Obsługa złodzieja: klik w hex
+        if state.phase == "ROBBER":
+            hex_id = self.get_clicked_hex(state, mouse_pos)
+            if hex_id is not None:
+                print("Clicked hex:", hex_id)
+
+                action = Action(ActionType.MOVE_ROBBER, hex_id)
+                if action in state.legal_actions():
+                    print("MOVE_ROBBER applied")
+                    return state.apply(action)
+
+            return state
+
+        # 2. Normalne budowanie
+        vertex = self.get_clicked_vertex(state, mouse_pos)
+        if vertex is not None:
+            print("Clicked vertex:", vertex)
+
+            action = Action(ActionType.BUILD_CITY, vertex)
+            if action in state.legal_actions():
+                print("BUILD_CITY applied")
+                return state.apply(action)
+
+            action = Action(ActionType.BUILD_SETTLEMENT, vertex)
+            if action in state.legal_actions():
+                print("BUILD_SETTLEMENT applied")
+                return state.apply(action)
+
+        edge = self.get_clicked_edge(state, mouse_pos)
+        if edge is not None:
+            print("Clicked edge:", edge)
+
+            action = Action(ActionType.BUILD_ROAD, edge)
+            if action in state.legal_actions():
+                print("BUILD_ROAD applied")
+                return state.apply(action)
+
+        return state
+
+    def world_to_screen(self, point, scale=85, offset_x=700, offset_y=380):
+        x, y = point
+        sx = int(offset_x + x * scale)
+        sy = int(offset_y + y * scale)
+        return sx, sy
+
+    def hex_polygon(self, center, size_px=70):
+        cx, cy = center
+        points = []
+        for i in range(6):
+            angle_deg = -90 + i * 60
+            angle_rad = math.radians(angle_deg)
+            px = cx + size_px * math.cos(angle_rad)
+            py = cy + size_px * math.sin(angle_rad)
+            points.append((int(px), int(py)))
+        return points
+
+    def draw_hexes(self, state):
+        board = state.board
+
+        for hex_id, center in enumerate(board.hex_centers):
+            resource = board.hex_resources[hex_id]
+            number = board.hex_numbers[hex_id]
+
+            screen_center = self.world_to_screen(center)
+            polygon = self.hex_polygon(screen_center)
+
+            pygame.draw.polygon(self.screen, HEX_COLORS[resource], polygon)
+            pygame.draw.polygon(self.screen, EDGE_COLOR, polygon, 2)
+
+            if number is not None:
+                label = self.font_medium.render(str(number), True, TEXT_COLOR)
+                rect = label.get_rect(center=screen_center)
+
+                pygame.draw.circle(self.screen, (245, 235, 210), screen_center, 18)
+                pygame.draw.circle(self.screen, EDGE_COLOR, screen_center, 18, 2)
+                self.screen.blit(label, rect)
+
+            if hex_id == state.robber_hex:
+                rx, ry = screen_center
+                pygame.draw.circle(self.screen, ROBBER_COLOR, (rx, ry + 28), 10)
+
+    def draw_edges(self, state):
+        board = state.board
+
+        for edge_id, (a, b) in enumerate(board.edges):
+            pa = self.world_to_screen(board.vertex_positions[a])
+            pb = self.world_to_screen(board.vertex_positions[b])
+
+            owner = None
+            for player_id, player in enumerate(state.players):
+                if edge_id in player.roads:
+                    owner = player_id
+                    break
+
+            if owner is None:
+                pygame.draw.line(self.screen, (140, 140, 140), pa, pb, 2)
+            else:
+                pygame.draw.line(self.screen, PLAYER_COLORS[owner], pa, pb, 6)
+
+    def draw_vertices(self, state):
+        board = state.board
+
+        for vertex_id, pos in enumerate(board.vertex_positions):
+            p = self.world_to_screen(pos)
+
+            owner = None
+            is_city = False
+
+            for player_id, player in enumerate(state.players):
+                if vertex_id in player.settlements:
+                    owner = player_id
+                    is_city = False
+                    break
+                if vertex_id in player.cities:
+                    owner = player_id
+                    is_city = True
+                    break
+
+            if owner is None:
+                pygame.draw.circle(self.screen, VERTEX_COLOR, p, 4)
+            else:
+                color = PLAYER_COLORS[owner]
+                if is_city:
+                    rect = pygame.Rect(0, 0, 20, 20)
+                    rect.center = p
+                    pygame.draw.rect(self.screen, color, rect)
+                    pygame.draw.rect(self.screen, EDGE_COLOR, rect, 2)
+                else:
+                    pygame.draw.circle(self.screen, color, p, 9)
+                    pygame.draw.circle(self.screen, EDGE_COLOR, p, 9, 2)
+
+    def draw_sidebar(self, state):
+        x0 = 1030
+        y = 40
+
+        title = self.font_large.render("Catan Debug", True, TEXT_COLOR)
+        self.screen.blit(title, (x0, y))
+        y += 50
+
+        lines = [
+            f"Phase: {state.phase}",
+            f"Current player: {state.current_player}",
+            f"Dice rolled: {state.dice_rolled}",
+            f"Last roll: {state.last_roll}",
+            f"Robber hex: {state.robber_hex}",
+        ]
+
+        for line in lines:
+            txt = self.font_small.render(line, True, TEXT_COLOR)
+            self.screen.blit(txt, (x0, y))
+            y += 26
+
+        y += 20
+
+        for player_id, player in enumerate(state.players):
+            color = PLAYER_COLORS[player_id]
+
+            header = self.font_medium.render(f"Player {player_id}", True, color)
+            self.screen.blit(header, (x0, y))
+            y += 34
+
+            vp = state.victory_points(player_id)
+            info = [
+                f"VP: {vp}",
+                f"Settlements: {len(player.settlements)}",
+                f"Cities: {len(player.cities)}",
+                f"Roads: {len(player.roads)}",
+                f"Brick: {player.resources[HexResource.BRICK]}",
+                f"Lumber: {player.resources[HexResource.LUMBER]}",
+                f"Wool: {player.resources[HexResource.WOOL]}",
+                f"Grain: {player.resources[HexResource.GRAIN]}",
+                f"Ore: {player.resources[HexResource.ORE]}",
+            ]
+
+            for line in info:
+                txt = self.font_small.render(line, True, TEXT_COLOR)
+                self.screen.blit(txt, (x0, y))
+                y += 24
+
+            y += 16
+
+    def draw_game_over(self, state):
+        if not state.is_terminal():
+            return
+
+        p0 = state.victory_points(0)
+        p1 = state.victory_points(1)
+
+        if p0 > p1:
+            text = "Game Over - Player 0 wins"
+        elif p1 > p0:
+            text = "Game Over - Player 1 wins"
+        else:
+            text = "Game Over - Draw"
+
+        overlay = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 90))
+        self.screen.blit(overlay, (0, 0))
+
+        label = self.font_large.render(text, True, (255, 255, 255))
+        rect = label.get_rect(center=(self.width // 2, 60))
+        self.screen.blit(label, rect)
+
+    def draw(self, state):
+        self.screen.fill(BACKGROUND)
+        self.draw_hexes(state)
+        self.draw_edges(state)
+        self.draw_vertices(state)
+        self.draw_sidebar(state)
+        self.draw_game_over(state)
+        pygame.display.flip()
+
+    def tick(self, fps=60):
+        self.clock.tick(fps)
+
+    def quit(self):
+        pygame.quit()

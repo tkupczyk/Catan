@@ -338,7 +338,7 @@ class GameState:
         return len(player.settlements) + 2 * len(player.cities)
 
     def is_terminal(self) -> bool:
-        return any(self.victory_points(i) >= 5 for i in range(len(self.players)))
+        return any(self.victory_points(i) >= 10 for i in range(len(self.players)))
 
     def reward(self, player_id: int) -> float:
         my_vp = self.victory_points(player_id)
