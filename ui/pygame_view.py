@@ -12,7 +12,13 @@ ROBBER_COLOR = (30, 30, 30)
 HIGHLIGHT_VERTEX = (255, 255, 0)
 HIGHLIGHT_EDGE = (255, 255, 0)
 HIGHLIGHT_HEX = (255, 200, 0)
-
+BUTTON_BG = (220, 220, 220)
+BUTTON_BORDER = (80, 80, 80)
+BUTTON_TEXT = (20, 20, 20)
+BUTTON_DISABLED = (180, 180, 180)
+BUTTON_HOVER_BG = (235, 235, 235)
+BUTTON_PRESSED_BG = (180, 180, 180)
+BUTTON_SHADOW = (120, 120, 120)
 
 PLAYER_COLORS = [
     (200, 50, 50),   # gracz 0
@@ -29,6 +35,7 @@ HEX_COLORS = {
     HexResource.GRAIN: (220, 200, 90),
     HexResource.ORE: (130, 130, 140),
     HexResource.DESERT: (220, 195, 140),
+    
 }
 
 
@@ -45,8 +52,22 @@ class PygameView:
         self.font_small = pygame.font.SysFont("arial", 18)
         self.font_medium = pygame.font.SysFont("arial", 24, bold=True)
         self.font_large = pygame.font.SysFont("arial", 30, bold=True)
+        self.roll_button_rect = pygame.Rect(1030, 820, 140, 42)
+        self.end_turn_button_rect = pygame.Rect(1190, 820, 140, 42)
+        self.hovered_button = None
+        self.pressed_button = None
 
         self.clock = pygame.time.Clock()
+
+    def has_action_type(self, state, action_type):
+        return any(a.type == action_type for a in state.legal_actions())
+
+    def button_at_pos(self, mouse_pos):
+        if self.roll_button_rect.collidepoint(mouse_pos):
+            return "roll"
+        if self.end_turn_button_rect.collidepoint(mouse_pos):
+            return "end_turn"
+        return None
 
     def legal_targets(self, state, action_type):
         result = []
@@ -54,6 +75,33 @@ class PygameView:
             if action.type == action_type:
                 result.append(action.target)
         return result
+    
+    def begin_ui_press(self, mouse_pos):
+        self.pressed_button = self.button_at_pos(mouse_pos)
+        return self.pressed_button is not None
+
+    def end_ui_press(self, state, mouse_pos):
+        released_on = self.button_at_pos(mouse_pos)
+        pressed = self.pressed_button
+        self.pressed_button = None
+
+        if pressed is None or released_on != pressed:
+            return None
+
+        if pressed == "roll":
+            if self.has_action_type(state, ActionType.ROLL_DICE):
+                return state.apply(Action(ActionType.ROLL_DICE))
+            return state
+
+        if pressed == "end_turn":
+            if self.has_action_type(state, ActionType.END_TURN):
+                return state.apply(Action(ActionType.END_TURN))
+            return state
+
+        return None
+
+    def update_hover(self, mouse_pos):
+        self.hovered_button = self.button_at_pos(mouse_pos)
 
     def get_clicked_hex(self, state, mouse_pos, radius=55):
         mx, my = mouse_pos
@@ -113,6 +161,30 @@ class PygameView:
                 return edge_id
 
         return None
+    
+    def get_status_text(self, state):
+        if state.is_terminal():
+            p0 = state.victory_points(0)
+            p1 = state.victory_points(1)
+
+            if p0 > p1:
+                return "Game Over - Player 0 wins"
+            elif p1 > p0:
+                return "Game Over - Player 1 wins"
+            else:
+                return "Game Over - Draw"
+
+        if state.current_player == 1:
+            return "AI is thinking..."
+
+        # gracz
+        if state.phase == "ROBBER":
+            return "Move the robber"
+
+        if not state.dice_rolled:
+            return "Click Roll Dice"
+
+        return "Build or End Turn"
 
     def handle_click(self, state, mouse_pos):
         print("handle_click called")
@@ -155,6 +227,11 @@ class PygameView:
                 return state.apply(action)
 
         return state
+    
+    def is_button_pressed(self, name):
+        now = pygame.time.get_ticks()
+        return self.button_pressed_until.get(name, 0) > now
+
 
     def world_to_screen(self, point, scale=85, offset_x=700, offset_y=380):
         x, y = point
@@ -172,6 +249,58 @@ class PygameView:
             py = cy + size_px * math.sin(angle_rad)
             points.append((int(px), int(py)))
         return points
+
+    def draw_button(self, rect, text, enabled=True, hovered=False, pressed=False):
+        if not enabled:
+            bg = BUTTON_DISABLED
+        elif pressed:
+            bg = BUTTON_PRESSED_BG
+        elif hovered:
+            bg = BUTTON_HOVER_BG
+        else:
+            bg = BUTTON_BG
+
+        draw_rect = rect.copy()
+        shadow_rect = rect.copy()
+
+        if pressed and enabled:
+            draw_rect.y += 3
+        else:
+            shadow_rect.y += 4
+            pygame.draw.rect(self.screen, BUTTON_SHADOW, shadow_rect, border_radius=8)
+
+        pygame.draw.rect(self.screen, bg, draw_rect, border_radius=8)
+        pygame.draw.rect(
+            self.screen,
+            BUTTON_BORDER,
+            draw_rect,
+            width=3 if hovered or pressed else 2,
+            border_radius=8,
+        )
+
+        label = self.font_small.render(text, True, BUTTON_TEXT)
+        label_rect = label.get_rect(center=draw_rect.center)
+        self.screen.blit(label, label_rect)
+
+    def draw_buttons(self, state):
+        roll_enabled = self.has_action_type(state, ActionType.ROLL_DICE)
+        end_enabled = self.has_action_type(state, ActionType.END_TURN)
+
+        self.draw_button(
+            self.roll_button_rect,
+            "Roll Dice",
+            enabled=roll_enabled,
+            hovered=(self.hovered_button == "roll"),
+            pressed=(self.pressed_button == "roll"),
+        )
+
+        self.draw_button(
+            self.end_turn_button_rect,
+            "End Turn",
+            enabled=end_enabled,
+            hovered=(self.hovered_button == "end_turn"),
+            pressed=(self.pressed_button == "end_turn"),
+        )
 
     def draw_hexes(self, state):
         board = state.board
@@ -255,6 +384,14 @@ class PygameView:
         title = self.font_large.render("Catan Debug", True, TEXT_COLOR)
         self.screen.blit(title, (x0, y))
         y += 50
+
+        y += 10
+
+        status = self.get_status_text(state)
+        status_label = self.font_medium.render(status, True, (40, 40, 40))
+        self.screen.blit(status_label, (x0, y))
+
+        y += 40
 
         lines = [
             f"Phase: {state.phase}",
@@ -382,6 +519,7 @@ class PygameView:
         self.draw_vertices(state)
         self.draw_sidebar(state)
         self.draw_game_over(state)
+        self.draw_buttons(state)
         pygame.display.flip()
 
     def tick(self, fps=60):

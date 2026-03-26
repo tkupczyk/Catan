@@ -153,6 +153,8 @@ def main():
     running = True
 
     ai_thinking = False
+    mouse_pressed_on_ui = False
+
 
     while running:
         for event in pygame.event.get():
@@ -165,30 +167,21 @@ def main():
 
             # ruchy człowieka tylko w jego turze
             if state.current_player == HUMAN_PLAYER:
+                if event.type == pygame.MOUSEMOTION:
+                    view.update_hover(event.pos)
+
                 if event.type == pygame.MOUSEBUTTONDOWN:
-                    print("Mouse click:", event.pos)
-                    state = view.handle_click(state, event.pos)
+                    mouse_pressed_on_ui = view.begin_ui_press(event.pos)
 
-                if event.type == pygame.KEYDOWN:
-                    print("KEYDOWN:", event.key)
-                    print("Current phase:", state.phase)
-                    print("Current player:", state.current_player)
-                    print("Dice rolled:", state.dice_rolled)
-                    print("Legal actions:", state.legal_actions())
+                if event.type == pygame.MOUSEBUTTONUP:
+                    new_state = view.end_ui_press(state, event.pos)
 
-                    if event.key == pygame.K_r:
-                        if any(a.type == ActionType.ROLL_DICE for a in state.legal_actions()):
-                            print("Applying ROLL_DICE")
-                            state = state.apply(Action(ActionType.ROLL_DICE))
-                        else:
-                            print("ROLL_DICE not legal now")
+                    if new_state is not None:
+                        state = new_state
+                    elif not mouse_pressed_on_ui:
+                        state = view.handle_click(state, event.pos)
 
-                    if event.key == pygame.K_e:
-                        if any(a.type == ActionType.END_TURN for a in state.legal_actions()):
-                            print("Applying END_TURN")
-                            state = state.apply(Action(ActionType.END_TURN))
-                        else:
-                            print("END_TURN not legal now")
+                    mouse_pressed_on_ui = False
 
         # ruch AI
         if state.current_player == AI_PLAYER and not ai_thinking:
