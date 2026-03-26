@@ -9,6 +9,9 @@ EDGE_COLOR = (80, 80, 80)
 VERTEX_COLOR = (120, 120, 120)
 TEXT_COLOR = (20, 20, 20)
 ROBBER_COLOR = (30, 30, 30)
+HIGHLIGHT_VERTEX = (255, 255, 0)
+HIGHLIGHT_EDGE = (255, 255, 0)
+HIGHLIGHT_HEX = (255, 200, 0)
 
 
 PLAYER_COLORS = [
@@ -45,7 +48,14 @@ class PygameView:
 
         self.clock = pygame.time.Clock()
 
-    def get_clicked_hex(self, state, mouse_pos, radius=45):
+    def legal_targets(self, state, action_type):
+        result = []
+        for action in state.legal_actions():
+            if action.type == action_type:
+                result.append(action.target)
+        return result
+
+    def get_clicked_hex(self, state, mouse_pos, radius=55):
         mx, my = mouse_pos
 
         for hex_id, center in enumerate(state.board.hex_centers):
@@ -57,7 +67,7 @@ class PygameView:
 
         return None
 
-    def get_clicked_vertex(self, state, mouse_pos, radius=12):
+    def get_clicked_vertex(self, state, mouse_pos, radius=18):
         mx, my = mouse_pos
 
         for vertex_id, pos in enumerate(state.board.vertex_positions):
@@ -90,7 +100,7 @@ class PygameView:
         return math.hypot(px - proj_x, py - proj_y)
 
 
-    def get_clicked_edge(self, state, mouse_pos, threshold=8):
+    def get_clicked_edge(self, state, mouse_pos, threshold=14):
         mx, my = mouse_pos
 
         for edge_id, (a, b) in enumerate(state.board.edges):
@@ -288,6 +298,60 @@ class PygameView:
 
             y += 16
 
+    def draw_highlights(self, state):
+        legal_actions = state.legal_actions()
+        action_types = {a.type for a in legal_actions}
+
+        # --- HEX (ROBBER) ---
+        if ActionType.MOVE_ROBBER in action_types:
+            hex_ids = self.legal_targets(state, ActionType.MOVE_ROBBER)
+
+            for hex_id in hex_ids:
+                center = self.world_to_screen(state.board.hex_centers[hex_id])
+
+                # półprzezroczyste wypełnienie
+                surf = pygame.Surface((120, 120), pygame.SRCALPHA)
+                pygame.draw.circle(surf, (255, 200, 0, 80), (60, 60), 50)
+                self.screen.blit(surf, (center[0] - 60, center[1] - 60))
+
+                # obrys
+                pygame.draw.circle(self.screen, HIGHLIGHT_HEX, center, 50, 4)
+
+        # --- VERTEX ---
+        vertex_targets = set()
+
+        if ActionType.BUILD_SETTLEMENT in action_types:
+            vertex_targets.update(self.legal_targets(state, ActionType.BUILD_SETTLEMENT))
+
+        if ActionType.BUILD_CITY in action_types:
+            vertex_targets.update(self.legal_targets(state, ActionType.BUILD_CITY))
+
+        for vertex_id in vertex_targets:
+            p = self.world_to_screen(state.board.vertex_positions[vertex_id])
+
+            # glow (półprzezroczyste)
+            surf = pygame.Surface((60, 60), pygame.SRCALPHA)
+            pygame.draw.circle(surf, (255, 255, 0, 90), (30, 30), 18)
+            self.screen.blit(surf, (p[0] - 30, p[1] - 30))
+
+            # mocny obrys
+            pygame.draw.circle(self.screen, HIGHLIGHT_VERTEX, p, 18, 4)
+
+        # --- EDGE ---
+        if ActionType.BUILD_ROAD in action_types:
+            edge_ids = self.legal_targets(state, ActionType.BUILD_ROAD)
+
+            for edge_id in edge_ids:
+                a, b = state.board.edges[edge_id]
+                pa = self.world_to_screen(state.board.vertex_positions[a])
+                pb = self.world_to_screen(state.board.vertex_positions[b])
+
+                # glow linia
+                pygame.draw.line(self.screen, (255, 255, 0, 120), pa, pb, 8)
+
+                # właściwa linia
+                pygame.draw.line(self.screen, HIGHLIGHT_EDGE, pa, pb, 4)
+
     def draw_game_over(self, state):
         if not state.is_terminal():
             return
@@ -313,6 +377,7 @@ class PygameView:
     def draw(self, state):
         self.screen.fill(BACKGROUND)
         self.draw_hexes(state)
+        self.draw_highlights(state)
         self.draw_edges(state)
         self.draw_vertices(state)
         self.draw_sidebar(state)
