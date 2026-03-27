@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from enum import Enum
 from math import sqrt
 from typing import Dict, List, Tuple
+import random
 
 VertexId = int
 Edge = Tuple[VertexId, VertexId]
@@ -87,6 +88,37 @@ def _standard_catan_axial_coords() -> List[Axial]:
     coords.sort(key=lambda x: (x[1], x[0]))
     return coords
 
+def _hex_adjacency(hex_vertices: List[List[int]]) -> List[List[int]]:
+    """
+    Zwraca listę sąsiadów dla każdego heksa.
+    Dwa heksy są sąsiadami jeśli dzielą co najmniej 2 wierzchołki.
+    """
+    n = len(hex_vertices)
+    neighbors = [[] for _ in range(n)]
+
+    for i in range(n):
+        vi = set(hex_vertices[i])
+        for j in range(i + 1, n):
+            vj = set(hex_vertices[j])
+            if len(vi & vj) >= 2:
+                neighbors[i].append(j)
+                neighbors[j].append(i)
+
+    return neighbors
+
+def _valid_number_layout(numbers: List[int | None], neighbors: List[List[int]]) -> bool:
+    """
+    Sprawdza czy 6 i 8 nie są obok siebie.
+    """
+    for i, num in enumerate(numbers):
+        if num not in (6, 8):
+            continue
+
+        for j in neighbors[i]:
+            if numbers[j] in (6, 8):
+                return False
+
+    return True
 
 def _default_hex_resources() -> List[HexResource]:
     """
@@ -116,6 +148,28 @@ def _default_hex_resources() -> List[HexResource]:
     ]
 
 
+def _random_hex_resources(rng: random.Random) -> List[HexResource]:
+    """
+    Losowy układ zasobów zgodny ze standardowym Catanem:
+    - 4 lumber
+    - 4 wool
+    - 4 grain
+    - 3 brick
+    - 3 ore
+    - 1 desert
+    """
+    resources = (
+        [HexResource.LUMBER] * 4 +
+        [HexResource.WOOL] * 4 +
+        [HexResource.GRAIN] * 4 +
+        [HexResource.BRICK] * 3 +
+        [HexResource.ORE] * 3 +
+        [HexResource.DESERT]
+    )
+    rng.shuffle(resources)
+    return resources
+
+
 def _default_hex_numbers(resources: List[HexResource]) -> List[int | None]:
     """
     Standardowy zestaw numerów Catana.
@@ -139,12 +193,51 @@ def _default_hex_numbers(resources: List[HexResource]) -> List[int | None]:
     return numbers
 
 
-def create_full_board(size: float = 1.0) -> Board:
+def _random_hex_numbers(resources: List[HexResource],
+                        hex_vertices: List[List[int]],
+                        rng: random.Random) -> List[int | None]:
+    """
+    Losuje numery tak, żeby 6 i 8 nie były sąsiadami.
+    """
+    available_numbers = [
+        2, 3, 3, 4, 4, 5, 5, 6, 6,
+        8, 8, 9, 9, 10, 10, 11, 11, 12
+    ]
+
+    neighbors = _hex_adjacency(hex_vertices)
+
+    while True:
+        rng.shuffle(available_numbers)
+
+        numbers: List[int | None] = []
+        idx = 0
+
+        for resource in resources:
+            if resource == HexResource.DESERT:
+                numbers.append(None)
+            else:
+                numbers.append(available_numbers[idx])
+                idx += 1
+
+        if _valid_number_layout(numbers, neighbors):
+            return numbers
+
+
+def create_full_board(
+    size: float = 1.0,
+    randomize: bool = True,
+    seed: int | None = None,
+) -> Board:
     """
     Tworzy pełną planszę standardowego Catana:
     - 19 heksów
     - 54 wierzchołki
     - 72 krawędzie
+
+    Parametry:
+    - randomize=True  -> losowe zasoby i numery
+    - randomize=False -> stały układ testowy
+    - seed            -> opcjonalny seed do debugowania
     """
     axial_coords = _standard_catan_axial_coords()
     hex_centers = [_axial_to_pixel(q, r, size) for q, r in axial_coords]
@@ -194,8 +287,14 @@ def create_full_board(size: float = 1.0) -> Board:
         vertex_edges[b].append(edge_id)
 
     # 4. Dane heksów
-    hex_resources = _default_hex_resources()
-    hex_numbers = _default_hex_numbers(hex_resources)
+    rng = random.Random(seed)
+
+    if randomize:
+        hex_resources = _random_hex_resources(rng)
+        hex_numbers = _random_hex_numbers(hex_resources, hex_vertices, rng)
+    else:
+        hex_resources = _default_hex_resources()
+        hex_numbers = _default_hex_numbers(hex_resources)
 
     rounded_centers = [_round_point(c) for c in hex_centers]
 

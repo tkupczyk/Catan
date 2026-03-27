@@ -1,6 +1,7 @@
 import random
 import pygame
 
+from core import board
 from core.board import create_full_board, HexResource
 from core.state import GameState, PlayerState
 from core.actions import Action, ActionType
@@ -127,8 +128,13 @@ def main():
     HUMAN_PLAYER = 0
     AI_PLAYER = 1
 
-    board = create_full_board()
+    board = create_full_board(randomize=True)
     desert_hex = next(i for i, r in enumerate(board.hex_resources) if r == HexResource.DESERT)
+
+    print("\n=== DEBUG: 6/8 positions ===")
+    for i, num in enumerate(board.hex_numbers):
+        if num in (6, 8):
+            print(f"Hex {i}: {num}")
 
     state = GameState(
         board=board,
