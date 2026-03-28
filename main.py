@@ -184,8 +184,12 @@ def main():
 
                     if new_state is not None:
                         state = new_state
-                    elif not mouse_pressed_on_ui:
-                        state = view.handle_click(state, event.pos)
+                    else:
+                        trade_state = view.handle_trade_selection_click(state, event.pos)
+                        if trade_state is not None:
+                            state = trade_state
+                        elif not mouse_pressed_on_ui:
+                            state = view.handle_click(state, event.pos)
 
                     mouse_pressed_on_ui = False
 

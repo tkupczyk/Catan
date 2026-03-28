@@ -1,5 +1,6 @@
 import math
 import pygame
+import os
 from core.actions import Action, ActionType
 from core.board import HexResource
 
@@ -38,9 +39,16 @@ HEX_COLORS = {
     
 }
 
+TRADE_RESOURCES = [
+    HexResource.BRICK,
+    HexResource.LUMBER,
+    HexResource.WOOL,
+    HexResource.GRAIN,
+    HexResource.ORE,
+]
 
 class PygameView:
-    def __init__(self, width: int = 1400, height: int = 1000):
+    def __init__(self, width: int = 1400, height: int = 1080):
         pygame.init()
         pygame.font.init()
 
@@ -54,19 +62,96 @@ class PygameView:
         self.font_large = pygame.font.SysFont("arial", 30, bold=True)
         self.roll_button_rect = pygame.Rect(1030, 820, 140, 42)
         self.end_turn_button_rect = pygame.Rect(1190, 820, 140, 42)
+        self.resource_icons = self.load_resource_icons()
+        self.ui_icons = self.load_ui_icons()
         self.hovered_button = None
         self.pressed_button = None
+        self.selected_give_resource = None
+        self.selected_get_resource = None
+        self.trade_give_rects = {}
+        self.trade_get_rects = {}
+
+        start_x = 1095
+        give_y = 910
+        get_y = 960
+        button_w = 46
+        button_h = 46
+        gap = 10
+
+        for i, resource in enumerate(TRADE_RESOURCES):
+            x = start_x + i * (button_w + gap)
+            self.trade_give_rects[resource] = pygame.Rect(x, give_y, button_w, button_h)
+            self.trade_get_rects[resource] = pygame.Rect(x, get_y, button_w, button_h)
+
+        self.trade_execute_rect = pygame.Rect(1030, 1018, 140, 44)
+
 
         self.clock = pygame.time.Clock()
 
+
+    def load_ui_icons(self):
+        base_dir = os.path.dirname(os.path.dirname(__file__))
+        pictures_dir = os.path.join(base_dir, "pictures")
+
+        file_map = {
+            "settlement": "settlement.png",
+            "city": "city.png",
+            "road": "road.png",
+        }
+
+        icons = {}
+
+        for name, filename in file_map.items():
+            path = os.path.join(pictures_dir, filename)
+            image = pygame.image.load(path).convert_alpha()
+            image = pygame.transform.smoothscale(image, (28, 28))
+            icons[name] = image
+
+        return icons
+
+    def load_resource_icons(self):
+        base_dir = os.path.dirname(os.path.dirname(__file__))
+        pictures_dir = os.path.join(base_dir, "pictures")
+
+        file_map = {
+            HexResource.BRICK: "brick.png",
+            HexResource.LUMBER: "lumber.png",
+            HexResource.WOOL: "wool.png",
+            HexResource.GRAIN: "grain.png",
+            HexResource.ORE: "ore.png",
+            HexResource.DESERT: "desert.png",
+        }
+
+        icons = {}
+
+        for resource, filename in file_map.items():
+            path = os.path.join(pictures_dir, filename)
+
+            image = pygame.image.load(path).convert_alpha()
+            image = pygame.transform.smoothscale(image, (34, 34))
+            icons[resource] = image
+
+        return icons
+
     def has_action_type(self, state, action_type):
         return any(a.type == action_type for a in state.legal_actions())
+
+    def resource_short_name(self, resource):
+        return {
+            HexResource.BRICK: "B",
+            HexResource.LUMBER: "L",
+            HexResource.WOOL: "W",
+            HexResource.GRAIN: "G",
+            HexResource.ORE: "O",
+        }[resource]
 
     def button_at_pos(self, mouse_pos):
         if self.roll_button_rect.collidepoint(mouse_pos):
             return "roll"
         if self.end_turn_button_rect.collidepoint(mouse_pos):
             return "end_turn"
+        if self.trade_execute_rect.collidepoint(mouse_pos):
+            return "trade"
         return None
 
     def legal_targets(self, state, action_type):
@@ -96,6 +181,23 @@ class PygameView:
         if pressed == "end_turn":
             if self.has_action_type(state, ActionType.END_TURN):
                 return state.apply(Action(ActionType.END_TURN))
+            return state
+
+        if pressed == "trade":
+            if (
+                self.selected_give_resource is not None
+                and self.selected_get_resource is not None
+                and self.selected_give_resource != self.selected_get_resource
+            ):
+                action = Action(
+                    ActionType.TRADE_BANK,
+                    resource_give=self.selected_give_resource,
+                    resource_get=self.selected_get_resource,
+                )
+
+                if action in state.legal_actions():
+                    return state.apply(action)
+
             return state
 
         return None
@@ -228,6 +330,19 @@ class PygameView:
 
         return state
     
+    def handle_trade_selection_click(self, state, mouse_pos):
+        for resource, rect in self.trade_give_rects.items():
+            if rect.collidepoint(mouse_pos):
+                self.selected_give_resource = resource
+                return state
+
+        for resource, rect in self.trade_get_rects.items():
+            if rect.collidepoint(mouse_pos):
+                self.selected_get_resource = resource
+                return state
+
+        return None
+
     def is_button_pressed(self, name):
         now = pygame.time.get_ticks()
         return self.button_pressed_until.get(name, 0) > now
@@ -249,6 +364,151 @@ class PygameView:
             py = cy + size_px * math.sin(angle_rad)
             points.append((int(px), int(py)))
         return points
+
+    def draw_resource_icon(self, center, resource):
+        icon = self.resource_icons.get(resource)
+        if icon is None:
+            return
+
+        rect = icon.get_rect(center=(center[0], center[1] - 34))
+        self.screen.blit(icon, rect)
+
+
+
+    def draw_trade_panel(self, state):
+        x0 = 1030
+        y0 = 875
+
+        title = self.font_small.render("Bank Trade 4:1", True, TEXT_COLOR)
+        self.screen.blit(title, (x0, y0))
+
+        give_label = self.font_small.render("Give 4:", True, TEXT_COLOR)
+        self.screen.blit(give_label, (x0, y0 + 34))
+
+        get_label = self.font_small.render(" Get 1:", True, TEXT_COLOR)
+        self.screen.blit(get_label, (x0, y0 + 84))
+
+        current_player = state.players[state.current_player]
+
+        for resource, rect in self.trade_give_rects.items():
+            selected = (self.selected_give_resource == resource)
+            enabled = current_player.resources[resource] >= 4 and self.has_action_type(state, ActionType.END_TURN)
+
+            self.draw_resource_button(
+                rect,
+                resource,
+                selected=selected,
+                enabled=enabled,
+            )
+
+        for resource, rect in self.trade_get_rects.items():
+            selected = (self.selected_get_resource == resource)
+            enabled = self.has_action_type(state, ActionType.END_TURN)
+
+            self.draw_resource_button(
+                rect,
+                resource,
+                selected=selected,
+                enabled=enabled,
+            )
+
+        trade_enabled = False
+        if self.selected_give_resource is not None and self.selected_get_resource is not None:
+            if self.selected_give_resource != self.selected_get_resource:
+                trade_enabled = any(
+                    a.type == ActionType.TRADE_BANK
+                    and a.resource_give == self.selected_give_resource
+                    and a.resource_get == self.selected_get_resource
+                    for a in state.legal_actions()
+                )
+
+        self.draw_primary_button(
+            self.trade_execute_rect,
+            "Trade",
+            enabled=trade_enabled,
+            hovered=(self.hovered_button == "trade"),
+            pressed=(self.pressed_button == "trade"),
+        )
+
+    def draw_inventory_bar(self, state):
+        player = state.players[0]  # gracz człowiek
+
+        bar_rect = pygame.Rect(170, 980, 720, 70)
+        pygame.draw.rect(self.screen, (235, 230, 210), bar_rect, border_radius=12)
+        pygame.draw.rect(self.screen, BUTTON_BORDER, bar_rect, 2, border_radius=12)
+
+        items = [
+            ("settlement", len(player.settlements)),
+            ("city", len(player.cities)),
+            ("road", len(player.roads)),
+            (HexResource.BRICK, player.resources[HexResource.BRICK]),
+            (HexResource.ORE, player.resources[HexResource.ORE]),
+            (HexResource.LUMBER, player.resources[HexResource.LUMBER]),
+            (HexResource.WOOL, player.resources[HexResource.WOOL]),
+            (HexResource.GRAIN, player.resources[HexResource.GRAIN]),
+        ]
+
+        x = bar_rect.x + 18
+        y = bar_rect.y + 24
+
+        for item, amount in items:
+            if isinstance(item, HexResource):
+                icon = self.resource_icons.get(item)
+            else:
+                icon = self.ui_icons.get(item)
+
+            if icon is not None:
+                icon_rect = icon.get_rect(topleft=(x, y - 6))
+                self.screen.blit(icon, icon_rect)
+
+            txt = self.font_small.render(str(amount), True, TEXT_COLOR)
+            self.screen.blit(txt, (x + 38, y))
+
+            x += 90
+
+    def draw_primary_button(self, rect, text, enabled=True, hovered=False, pressed=False):
+        if not enabled:
+            bg = (170, 170, 170)
+        elif pressed:
+            bg = (120, 180, 120)
+        elif hovered:
+            bg = (150, 210, 150)
+        else:
+            bg = (135, 195, 135)
+
+        draw_rect = rect.copy()
+        shadow_rect = rect.copy()
+
+        if pressed and enabled:
+            draw_rect.y += 3
+        else:
+            shadow_rect.y += 4
+            pygame.draw.rect(self.screen, BUTTON_SHADOW, shadow_rect, border_radius=8)
+
+        pygame.draw.rect(self.screen, bg, draw_rect, border_radius=8)
+        pygame.draw.rect(self.screen, BUTTON_BORDER, draw_rect, width=3, border_radius=8)
+
+        label = self.font_small.render(text, True, BUTTON_TEXT)
+        label_rect = label.get_rect(center=draw_rect.center)
+        self.screen.blit(label, label_rect)
+
+    def draw_resource_button(self, rect, resource, selected=False, enabled=True):
+        base_color = HEX_COLORS[resource]
+
+        if not enabled:
+            color = (170, 170, 170)
+        elif selected:
+            color = tuple(min(255, c + 35) for c in base_color)
+        else:
+            color = base_color
+
+        pygame.draw.rect(self.screen, color, rect, border_radius=8)
+        pygame.draw.rect(self.screen, BUTTON_BORDER, rect, width=3 if selected else 2, border_radius=8)
+
+        icon = self.resource_icons.get(resource)
+        if icon is not None:
+            icon_rect = icon.get_rect(center=rect.center)
+            self.screen.blit(icon, icon_rect)
 
     def draw_button(self, rect, text, enabled=True, hovered=False, pressed=False):
         if not enabled:
@@ -314,6 +574,8 @@ class PygameView:
 
             pygame.draw.polygon(self.screen, HEX_COLORS[resource], polygon)
             pygame.draw.polygon(self.screen, EDGE_COLOR, polygon, 2)
+
+            self.draw_resource_icon(screen_center, resource)
 
             if number is not None:
                 label = self.font_medium.render(str(number), True, TEXT_COLOR)
@@ -520,6 +782,8 @@ class PygameView:
         self.draw_sidebar(state)
         self.draw_game_over(state)
         self.draw_buttons(state)
+        self.draw_trade_panel(state)
+        self.draw_inventory_bar(state)
         pygame.display.flip()
 
     def tick(self, fps=60):
