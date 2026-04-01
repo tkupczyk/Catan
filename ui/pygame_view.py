@@ -22,6 +22,7 @@ BUTTON_PRESSED_BG = (180, 180, 180)
 BUTTON_SHADOW = (120, 120, 120)
 PANEL_BG = (238, 233, 214)
 PANEL_BORDER = (90, 90, 90)
+SPECIAL_ICON_COLOR = (70, 70, 70)
 
 PLAYER_COLORS = [
     (200, 50, 50),   # gracz 0
@@ -62,30 +63,32 @@ class PygameView:
         self.font_small = pygame.font.SysFont("arial", 18)
         self.font_medium = pygame.font.SysFont("arial", 24, bold=True)
         self.font_large = pygame.font.SysFont("arial", 30, bold=True)
-        self.roll_button_rect = pygame.Rect(1030, 760, 140, 42)
-        self.end_turn_button_rect = pygame.Rect(1190, 760, 140, 42)
+        self.roll_button_rect = pygame.Rect(1030, 750, 140, 42)
+        self.end_turn_button_rect = pygame.Rect(1190, 750, 140, 42)
         self.resource_icons = self.load_resource_icons()
         self.ui_icons = self.load_ui_icons()
         self.hovered_button = None
         self.pressed_button = None
         self.selected_give_resource = None
         self.selected_get_resource = None
+
+
         self.trade_give_rects = {}
         self.trade_get_rects = {}
 
-        start_x = 1140
+        start_x = 1035
         give_y = 860
-        get_y = 920
-        button_w = 42
-        button_h = 42
+        get_y = 925
+        button_w = 40
+        button_h = 40
         gap = 8
 
         for i, resource in enumerate(TRADE_RESOURCES):
-            x = start_x + i * (button_w + gap)
+            x = start_x + 72 + i * (button_w + gap)
             self.trade_give_rects[resource] = pygame.Rect(x, give_y, button_w, button_h)
             self.trade_get_rects[resource] = pygame.Rect(x, get_y, button_w, button_h)
 
-        self.trade_execute_rect = pygame.Rect(1030, 990, 140, 42)
+        self.trade_execute_rect = pygame.Rect(1110, 985, 150, 42)
 
 
         self.clock = pygame.time.Clock()
@@ -376,17 +379,51 @@ class PygameView:
         rect = icon.get_rect(center=(center[0], center[1] - 34))
         self.screen.blit(icon, rect)
 
+    def draw_icon_cost_row(self, rect, left_icon, costs):
+        """
+        left_icon: nazwa z ui_icons albo HexResource
+        costs: lista tuple (HexResource, amount)
+        """
+        x = rect.x + 12
+        y = rect.y + 6
 
+        # lewa ikona (co budujemy)
+        if isinstance(left_icon, HexResource):
+            icon = self.resource_icons.get(left_icon)
+        else:
+            icon = self.ui_icons.get(left_icon)
+
+        if icon is not None:
+            self.screen.blit(icon, icon.get_rect(topleft=(x, y)))
+
+        x += 40
+
+        eq = self.font_small.render("=", True, TEXT_COLOR)
+        self.screen.blit(eq, (x, y + 6))
+        x += 24
+
+        for idx, (resource, amount) in enumerate(costs):
+            icon = self.resource_icons.get(resource)
+            if icon is not None:
+                self.screen.blit(icon, icon.get_rect(topleft=(x, y)))
+
+            txt = self.font_small.render(str(amount), True, TEXT_COLOR)
+            self.screen.blit(txt, (x + 36, y + 6))
+            x += 62
+
+            if idx < len(costs) - 1:
+                plus = self.font_small.render("+", True, TEXT_COLOR)
+                self.screen.blit(plus, (x - 10, y + 6))
 
     def draw_trade_panel(self, state):
-        rect = pygame.Rect(1030, 820, 320, 230)
+        rect = pygame.Rect(1030, 820, 330, 220)
         self.draw_panel(rect, "Handel z bankiem")
 
         give_label = self.font_small.render("Oddaj 4:", True, TEXT_COLOR)
-        self.screen.blit(give_label, (rect.x + 14, rect.y + 42))
+        self.screen.blit(give_label, (rect.x + 14, rect.y + 46))
 
         take_label = self.font_small.render("Otrzymaj 1:", True, TEXT_COLOR)
-        self.screen.blit(take_label, (rect.x + 14, rect.y + 102))
+        self.screen.blit(take_label, (rect.x + 14, rect.y + 111))
 
         current_player = state.players[state.current_player]
 
@@ -430,16 +467,22 @@ class PygameView:
             pressed=(self.pressed_button == "trade"),
         )
 
-    def draw_inventory_bar(self, state):
-        player = state.players[0]  # człowiek
+    def draw_placeholder_badge(self, x, y, label, value):
+        badge_rect = pygame.Rect(x, y, 56, 28)
+        pygame.draw.rect(self.screen, (220, 215, 195), badge_rect, border_radius=8)
+        pygame.draw.rect(self.screen, BUTTON_BORDER, badge_rect, 2, border_radius=8)
 
-        bar_rect = pygame.Rect(210, 970, 630, 68)
+        txt = self.font_small.render(f"{label}:{value}", True, TEXT_COLOR)
+        txt_rect = txt.get_rect(center=badge_rect.center)
+        self.screen.blit(txt, txt_rect)
+
+    def draw_inventory_bar(self, state):
+        player = state.players[0]
+
+        bar_rect = pygame.Rect(320, 980, 510, 60)
         self.draw_panel(bar_rect)
 
         items = [
-            ("settlement", len(player.settlements)),
-            ("city", len(player.cities)),
-            ("road", len(player.roads)),
             (HexResource.BRICK, player.resources[HexResource.BRICK]),
             (HexResource.ORE, player.resources[HexResource.ORE]),
             (HexResource.LUMBER, player.resources[HexResource.LUMBER]),
@@ -447,23 +490,18 @@ class PygameView:
             (HexResource.GRAIN, player.resources[HexResource.GRAIN]),
         ]
 
-        x = bar_rect.x + 16
+        x = bar_rect.x + 22
         y = bar_rect.y + 18
 
         for item, amount in items:
-            if isinstance(item, HexResource):
-                icon = self.resource_icons.get(item)
-            else:
-                icon = self.ui_icons.get(item)
-
+            icon = self.resource_icons.get(item)
             if icon is not None:
-                icon_rect = icon.get_rect(topleft=(x, y - 4))
-                self.screen.blit(icon, icon_rect)
+                self.screen.blit(icon, icon.get_rect(topleft=(x, y - 4)))
 
             txt = self.font_small.render(str(amount), True, TEXT_COLOR)
             self.screen.blit(txt, (x + 40, y + 3))
 
-            x += 76
+            x += 104
 
     def draw_primary_button(self, rect, text, enabled=True, hovered=False, pressed=False):
         if not enabled:
@@ -667,79 +705,93 @@ class PygameView:
             y += 22
 
     def draw_costs_panel(self):
-        rect = pygame.Rect(1030, 155, 320, 170)
+        rect = pygame.Rect(1030, 520, 330, 220)
         self.draw_panel(rect, "Koszty")
 
         rows = [
-            ("Droga", [("road", None), (HexResource.BRICK, 1), (HexResource.LUMBER, 1)]),
-            ("Osada", [("settlement", None), (HexResource.BRICK, 1), (HexResource.LUMBER, 1), (HexResource.WOOL, 1), (HexResource.GRAIN, 1)]),
-            ("Miasto", [("city", None), (HexResource.GRAIN, 2), (HexResource.ORE, 3)]),
-            ("Rozwój", [("card", None), (HexResource.WOOL, 1), (HexResource.GRAIN, 1), (HexResource.ORE, 1)]),
+            ("road", [(HexResource.BRICK, 1), (HexResource.LUMBER, 1)]),
+            ("settlement", [(HexResource.BRICK, 1), (HexResource.LUMBER, 1), (HexResource.WOOL, 1), (HexResource.GRAIN, 1)]),
+            ("city", [(HexResource.GRAIN, 2), (HexResource.ORE, 3)]),
+            ("card", [(HexResource.WOOL, 1), (HexResource.GRAIN, 1), (HexResource.ORE, 1)]),
         ]
 
         y = rect.y + 38
-        for label, items in rows:
-            txt = self.font_small.render(label, True, TEXT_COLOR)
-            self.screen.blit(txt, (rect.x + 14, y + 6))
-
-            x = rect.x + 90
-            for item, amount in items:
-                if isinstance(item, HexResource):
-                    icon = self.resource_icons.get(item)
-                else:
-                    icon = self.ui_icons.get(item)
-
-                if icon is not None:
-                    icon_rect = icon.get_rect(topleft=(x, y))
-                    self.screen.blit(icon, icon_rect)
-
-                if amount is not None:
-                    amount_txt = self.font_small.render(str(amount), True, TEXT_COLOR)
-                    self.screen.blit(amount_txt, (x + 30, y + 6))
-                    x += 52
-                else:
-                    x += 38
-
-            y += 32
+        for left_icon, costs in rows:
+            row_rect = pygame.Rect(rect.x + 8, y, rect.width - 16, 34)
+            self.draw_icon_cost_row(row_rect, left_icon, costs)
+            y += 40
 
     def draw_players_panel(self, state):
-        positions = [
-            pygame.Rect(30, 30, 250, 130),
-            pygame.Rect(30, 175, 250, 130),
+        # AI - lewa góra
+        ai_rect = pygame.Rect(30, 30, 250, 120)
+        self.draw_panel(ai_rect, "Gracz 1")
+
+        ai_color = PLAYER_COLORS[1]
+        pygame.draw.circle(self.screen, ai_color, (ai_rect.x + 210, ai_rect.y + 20), 8)
+
+        ai_player = state.players[1]
+        ai_vp = state.victory_points(1)
+
+        ai_items = [
+            ("settlement", len(ai_player.settlements)),
+            ("city", len(ai_player.cities)),
+            ("road", len(ai_player.roads)),
         ]
 
-        for player_id, rect in enumerate(positions):
-            self.draw_panel(rect, f"Gracz {player_id}")
+        x = ai_rect.x + 14
+        y = ai_rect.y + 42
 
-            color = PLAYER_COLORS[player_id]
-            pygame.draw.circle(self.screen, color, (rect.x + 210, rect.y + 20), 8)
+        vp_txt = self.font_small.render(f"PZ: {ai_vp}", True, TEXT_COLOR)
+        self.screen.blit(vp_txt, (x, y))
+        y += 28
 
-            player = state.players[player_id]
-            vp = state.victory_points(player_id)
+        for item, amount in ai_items:
+            icon = self.ui_icons.get(item)
+            if icon is not None:
+                self.screen.blit(icon, icon.get_rect(topleft=(x, y - 4)))
 
-            items = [
-                ("settlement", len(player.settlements)),
-                ("city", len(player.cities)),
-                ("road", len(player.roads)),
-            ]
+            amount_txt = self.font_small.render(str(amount), True, TEXT_COLOR)
+            self.screen.blit(amount_txt, (x + 36, y + 2))
+            x += 74
 
-            x = rect.x + 14
-            y = rect.y + 42
+        # Człowiek - lewy dół
+        human_rect = pygame.Rect(30, 890, 250, 150)
+        self.draw_panel(human_rect, "Gracz 0")
 
-            # PV
-            vp_txt = self.font_small.render(f"PZ: {vp}", True, TEXT_COLOR)
-            self.screen.blit(vp_txt, (x, y))
-            y += 28
+        human_color = PLAYER_COLORS[0]
+        pygame.draw.circle(self.screen, human_color, (human_rect.x + 210, human_rect.y + 20), 8)
 
-            for item, amount in items:
-                icon = self.ui_icons.get(item)
-                if icon is not None:
-                    icon_rect = icon.get_rect(topleft=(x, y - 4))
-                    self.screen.blit(icon, icon_rect)
+        human_player = state.players[0]
+        human_vp = state.victory_points(0)
 
-                amount_txt = self.font_small.render(str(amount), True, TEXT_COLOR)
-                self.screen.blit(amount_txt, (x + 34, y + 2))
-                x += 70
+        x = human_rect.x + 14
+        y = human_rect.y + 42
+
+        vp_txt = self.font_small.render(f"PZ: {human_vp}", True, TEXT_COLOR)
+        self.screen.blit(vp_txt, (x, y))
+        y += 28
+
+        items = [
+            ("settlement", len(human_player.settlements)),
+            ("city", len(human_player.cities)),
+            ("road", len(human_player.roads)),
+        ]
+
+        x_items = human_rect.x + 14
+        for item, amount in items:
+            icon = self.ui_icons.get(item)
+            if icon is not None:
+                self.screen.blit(icon, icon.get_rect(topleft=(x_items, y - 4)))
+
+            amount_txt = self.font_small.render(str(amount), True, TEXT_COLOR)
+            self.screen.blit(amount_txt, (x_items + 36, y + 2))
+            x_items += 74
+
+        # placeholdery na karty specjalne
+        y += 40
+        self.draw_placeholder_badge(human_rect.x + 14, y, "R", 0)   # rycerze
+        self.draw_placeholder_badge(human_rect.x + 78, y, "WA", 0)  # władza rycerska
+        self.draw_placeholder_badge(human_rect.x + 152, y, "DH", 0) # droga handlowa
 
     def draw_highlights(self, state):
         legal_actions = state.legal_actions()
@@ -827,10 +879,10 @@ class PygameView:
         self.draw_players_panel(state)
         self.draw_status_panel(state)
         self.draw_costs_panel()
+        self.draw_buttons(state)
         self.draw_trade_panel(state)
         self.draw_inventory_bar(state)
 
-        self.draw_buttons(state)
         self.draw_game_over(state)
         pygame.display.flip()
 
