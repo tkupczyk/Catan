@@ -1,5 +1,5 @@
 from .board import HexResource
-
+from .board import HexResource, PortType
 
 ROAD_COST = {
     HexResource.BRICK: 1,
@@ -25,6 +25,36 @@ def has_resources(player, cost: dict[HexResource, int]) -> bool:
             return False
     return True
 
+def get_player_trade_ratio(state, player_id: int, give_resource: HexResource) -> int:
+    """
+    Zwraca najlepszy dostępny kurs handlu dla danego gracza i surowca:
+    - 2:1 jeśli ma port specjalny dla tego surowca
+    - 3:1 jeśli ma port ogólny
+    - 4:1 domyślnie
+    """
+    player = state.players[player_id]
+    player_vertices = set(player.settlements) | set(player.cities)
+
+    best_ratio = 4
+
+    for (v1, v2), port_type in state.board.ports:
+        if v1 not in player_vertices and v2 not in player_vertices:
+            continue
+
+        if port_type == PortType.THREE_TO_ONE:
+            best_ratio = min(best_ratio, 3)
+        elif port_type == PortType.BRICK and give_resource == HexResource.BRICK:
+            best_ratio = min(best_ratio, 2)
+        elif port_type == PortType.LUMBER and give_resource == HexResource.LUMBER:
+            best_ratio = min(best_ratio, 2)
+        elif port_type == PortType.WOOL and give_resource == HexResource.WOOL:
+            best_ratio = min(best_ratio, 2)
+        elif port_type == PortType.GRAIN and give_resource == HexResource.GRAIN:
+            best_ratio = min(best_ratio, 2)
+        elif port_type == PortType.ORE and give_resource == HexResource.ORE:
+            best_ratio = min(best_ratio, 2)
+
+    return best_ratio
 
 def pay_cost(player, cost: dict[HexResource, int]) -> None:
     for resource, amount in cost.items():
@@ -50,7 +80,8 @@ def can_trade_bank(state, give_resource, get_resource) -> bool:
         return False
 
     player = state.players[state.current_player]
-    return player.resources[give_resource] >= 4
+    ratio = get_player_trade_ratio(state, state.current_player, give_resource)
+    return player.resources[give_resource] >= ratio
 
 
 def can_build_settlement(state, vertex: int) -> bool:

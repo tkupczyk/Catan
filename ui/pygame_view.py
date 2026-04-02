@@ -3,7 +3,8 @@ import pygame
 import os
 from core.actions import Action, ActionType
 from core.board import HexResource
-
+from core.board import HexResource, PortType
+from core import rules
 
 BACKGROUND = (245, 240, 220)
 EDGE_COLOR = (80, 80, 80)
@@ -138,6 +139,21 @@ class PygameView:
             icons[resource] = image
 
         return icons
+
+    def port_label(self, port_type):
+        if port_type == PortType.THREE_TO_ONE:
+            return "3:1"
+        if port_type == PortType.BRICK:
+            return "2:1 B"
+        if port_type == PortType.LUMBER:
+            return "2:1 D"
+        if port_type == PortType.WOOL:
+            return "2:1 W"
+        if port_type == PortType.GRAIN:
+            return "2:1 Z"
+        if port_type == PortType.ORE:
+            return "2:1 R"
+        return "?"
 
     def has_action_type(self, state, action_type):
         return any(a.type == action_type for a in state.legal_actions())
@@ -292,7 +308,7 @@ class PygameView:
         if not state.dice_rolled:
             return "Rzuć kośćmi"
 
-        return "Buduj, handluj, lub zakończ turę"
+        return "Akcja lub koniec tury"
 
     def handle_click(self, state, mouse_pos):
         print("handle_click called")
@@ -415,9 +431,43 @@ class PygameView:
                 plus = self.font_small.render("+", True, TEXT_COLOR)
                 self.screen.blit(plus, (x - 10, y + 6))
 
+    def draw_ports(self, state):
+        for (v1, v2), port_type in state.board.ports:
+            p1 = self.world_to_screen(state.board.vertex_positions[v1])
+            p2 = self.world_to_screen(state.board.vertex_positions[v2])
+
+            mx = (p1[0] + p2[0]) // 2
+            my = (p1[1] + p2[1]) // 2
+
+            # lekkie odsunięcie etykiety na zewnątrz planszy
+            cx = self.width // 2
+            cy = 420
+            dx = mx - cx
+            dy = my - cy
+            length = max(1, (dx * dx + dy * dy) ** 0.5)
+
+            ox = int(dx / length * 24)
+            oy = int(dy / length * 24)
+
+            tx = mx + ox
+            ty = my + oy
+
+            badge = pygame.Rect(tx - 22, ty - 12, 44, 24)
+            pygame.draw.rect(self.screen, (235, 230, 210), badge, border_radius=8)
+            pygame.draw.rect(self.screen, (80, 80, 80), badge, 2, border_radius=8)
+
+            txt = self.font_small.render(self.port_label(port_type), True, TEXT_COLOR)
+            txt_rect = txt.get_rect(center=badge.center)
+            self.screen.blit(txt, txt_rect)
+
     def draw_trade_panel(self, state):
         rect = pygame.Rect(1030, 820, 330, 220)
         self.draw_panel(rect, "Handel z bankiem")
+
+        if self.selected_give_resource is not None:
+            ratio = rules.get_player_trade_ratio(state, state.current_player, self.selected_give_resource)
+            ratio_txt = self.font_small.render(f"Aktualny kurs: {ratio}:1", True, TEXT_COLOR)
+            self.screen.blit(ratio_txt, (rect.x + 14, rect.y + 28))
 
         give_label = self.font_small.render("Oddaj 4:", True, TEXT_COLOR)
         self.screen.blit(give_label, (rect.x + 14, rect.y + 46))
@@ -882,6 +932,7 @@ class PygameView:
         self.draw_buttons(state)
         self.draw_trade_panel(state)
         self.draw_inventory_bar(state)
+        self.draw_ports(state)
 
         self.draw_game_over(state)
         pygame.display.flip()

@@ -237,7 +237,8 @@ class GameState:
             get_resource = action.resource_get
 
             if rules.can_trade_bank(self, give_resource, get_resource):
-                player.resources[give_resource] -= 4
+                ratio = rules.get_player_trade_ratio(self, self.current_player, give_resource)
+                player.resources[give_resource] -= ratio
                 player.resources[get_resource] += 1
             return
 

@@ -3,11 +3,13 @@ from enum import Enum
 from math import sqrt
 from typing import Dict, List, Tuple
 import random
+import math
 
 VertexId = int
 Edge = Tuple[VertexId, VertexId]
 Point = Tuple[float, float]
 Axial = Tuple[int, int]
+
 
 
 class HexResource(Enum):
@@ -18,6 +20,13 @@ class HexResource(Enum):
     ORE = "ore"
     DESERT = "desert"
 
+class PortType(Enum):
+    THREE_TO_ONE = "3:1"
+    BRICK = "brick"
+    LUMBER = "lumber"
+    WOOL = "wool"
+    GRAIN = "grain"
+    ORE = "ore"
 
 @dataclass
 class Board:
@@ -32,10 +41,74 @@ class Board:
     hex_resources: List[HexResource]   # hex_id -> resource type
     hex_numbers: List[int | None]      # hex_id -> dice number, None for desert
 
+    ports: List[Tuple[Tuple[int, int], PortType]]   # [((v1, v2), port_type), ...]
+
 
 def _round_point(p: Point, digits: int = 6) -> Point:
     return (round(p[0], digits), round(p[1], digits))
 
+
+def _create_ports(hex_vertices: List[List[int]], vertex_positions: List[Point]) -> List[Tuple[Tuple[int, int], PortType]]:
+    """
+    Tworzy 9 portów na krawędziach zewnętrznych planszy.
+    Port jest przypisany do pary sąsiednich vertexów na brzegu.
+    To wersja deterministyczna oparta o geometrię planszy.
+    """
+    # policz, które krawędzie należą tylko do jednego heksa = zewnętrzne
+    edge_counts: Dict[Tuple[int, int], int] = {}
+    for hv in hex_vertices:
+        for i in range(6):
+            a = hv[i]
+            b = hv[(i + 1) % 6]
+            e = tuple(sorted((a, b)))
+            edge_counts[e] = edge_counts.get(e, 0) + 1
+
+    boundary_edges = [e for e, count in edge_counts.items() if count == 1]
+
+    # sortowanie po kącie środka krawędzi względem środka planszy
+    cx = sum(x for x, _ in vertex_positions) / len(vertex_positions)
+    cy = sum(y for _, y in vertex_positions) / len(vertex_positions)
+
+    def edge_angle(edge):
+        a, b = edge
+        x = (vertex_positions[a][0] + vertex_positions[b][0]) / 2
+        y = (vertex_positions[a][1] + vertex_positions[b][1]) / 2
+        return math.atan2(y - cy, x - cx)
+
+    boundary_edges.sort(key=edge_angle)
+
+    # wybieramy 9 krawędzi mniej więcej równomiernie po okręgu
+    if len(boundary_edges) < 9:
+        raise ValueError("Za mało krawędzi brzegowych do przypisania portów.")
+
+    step = len(boundary_edges) / 9
+    chosen_edges = []
+    used = set()
+
+    for i in range(9):
+        idx = int(round(i * step)) % len(boundary_edges)
+        # znajdź najbliższą nieużytą
+        for shift in range(len(boundary_edges)):
+            j = (idx + shift) % len(boundary_edges)
+            if j not in used:
+                used.add(j)
+                chosen_edges.append(boundary_edges[j])
+                break
+
+    port_types = [
+        PortType.THREE_TO_ONE,
+        PortType.THREE_TO_ONE,
+        PortType.THREE_TO_ONE,
+        PortType.THREE_TO_ONE,
+        PortType.BRICK,
+        PortType.LUMBER,
+        PortType.WOOL,
+        PortType.GRAIN,
+        PortType.ORE,
+    ]
+
+    # można potem losować; na razie stabilnie
+    return list(zip(chosen_edges, port_types))
 
 def _hex_corners(center: Point, size: float) -> List[Point]:
     """
@@ -298,6 +371,8 @@ def create_full_board(
 
     rounded_centers = [_round_point(c) for c in hex_centers]
 
+    ports = _create_ports(hex_vertices, vertex_positions)
+
     return Board(
         edges=edges,
         vertex_neighbors=vertex_neighbors,
@@ -307,4 +382,5 @@ def create_full_board(
         vertex_positions=vertex_positions,
         hex_resources=hex_resources,
         hex_numbers=hex_numbers,
+        ports=ports,
     )
