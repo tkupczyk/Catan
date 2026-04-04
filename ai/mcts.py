@@ -56,8 +56,12 @@ def action_priority(action: Action) -> int:
         return 160
     if action.type == ActionType.BUILD_SETTLEMENT:
         return 145
+    if action.type == ActionType.PLAY_KNIGHT:
+        return 95
     if action.type == ActionType.TRADE_BANK:
         return 85
+    if action.type == ActionType.BUY_DEVELOPMENT_CARD:
+        return 70
     if action.type == ActionType.BUILD_ROAD:
         return 22
     if action.type == ActionType.ROLL_DICE:
@@ -133,6 +137,12 @@ def immediate_action_score(state, action: Action, player_id: int) -> float:
 
     if action.type == ActionType.BUILD_SETTLEMENT and action.target is not None:
         return 800.0 + 2.5 * vertex_production_score(state, action.target)
+
+    if action.type == ActionType.PLAY_KNIGHT:
+        return 180.0
+
+    if action.type == ActionType.BUY_DEVELOPMENT_CARD:
+        return 140.0
 
     if action.type == ActionType.TRADE_BANK:
         give_res = action.resource_give

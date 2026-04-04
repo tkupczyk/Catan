@@ -140,6 +140,7 @@ def main():
         board=board,
         players=[PlayerState(), PlayerState()],
         robber_hex=desert_hex,
+        development_deck=GameState.default_development_deck(),
     )
 
     state = run_auto_setup(state)

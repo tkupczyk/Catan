@@ -18,12 +18,30 @@ CITY_COST = {
     HexResource.ORE: 3,
 }
 
+DEVELOPMENT_CARD_COST = {
+    HexResource.WOOL: 1,
+    HexResource.GRAIN: 1,
+    HexResource.ORE: 1,
+}
 
 def has_resources(player, cost: dict[HexResource, int]) -> bool:
     for resource, amount in cost.items():
         if player.resources[resource] < amount:
             return False
     return True
+
+def can_buy_development_card(state) -> bool:
+    if state.phase != "MAIN":
+        return False
+
+    if not state.dice_rolled:
+        return False
+
+    if len(state.development_deck) == 0:
+        return False
+
+    player = state.players[state.current_player]
+    return has_resources(player, DEVELOPMENT_CARD_COST)
 
 def get_player_trade_ratio(state, player_id: int, give_resource: HexResource) -> int:
     """
@@ -62,7 +80,7 @@ def pay_cost(player, cost: dict[HexResource, int]) -> None:
 
 
 def can_move_robber(state, hex_id: int) -> bool:
-    if state.phase != "ROBBER":
+    if state.phase not in ("ROBBER", "ROBBER_FROM_KNIGHT"):
         return False
     if hex_id < 0 or hex_id >= len(state.board.hex_vertices):
         return False

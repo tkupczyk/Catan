@@ -6,6 +6,8 @@ class ActionType(Enum):
     ROLL_DICE = auto()
     MOVE_ROBBER = auto()
     TRADE_BANK = auto()
+    BUY_DEVELOPMENT_CARD = auto()
+    PLAY_KNIGHT = auto()
     BUILD_ROAD = auto()
     BUILD_SETTLEMENT = auto()
     BUILD_CITY = auto()

@@ -64,8 +64,11 @@ class PygameView:
         self.font_small = pygame.font.SysFont("arial", 18)
         self.font_medium = pygame.font.SysFont("arial", 24, bold=True)
         self.font_large = pygame.font.SysFont("arial", 30, bold=True)
-        self.roll_button_rect = pygame.Rect(1030, 750, 140, 42)
-        self.end_turn_button_rect = pygame.Rect(1190, 750, 140, 42)
+        self.play_cards_panel_rect = pygame.Rect(840, 845, 170, 190)
+        self.play_knight_card_rect = pygame.Rect(858, 885, 134, 34)
+        self.roll_button_rect = pygame.Rect(1030, 705, 140, 42)
+        self.end_turn_button_rect = pygame.Rect(1190, 705, 140, 42)
+        self.buy_dev_card_rect = pygame.Rect(1110, 752, 140, 42)
         self.resource_icons = self.load_resource_icons()
         self.ui_icons = self.load_ui_icons()
         self.hovered_button = None
@@ -78,8 +81,8 @@ class PygameView:
         self.trade_get_rects = {}
 
         start_x = 1035
-        give_y = 860
-        get_y = 925
+        give_y = 880
+        get_y = 935
         button_w = 40
         button_h = 40
         gap = 8
@@ -89,7 +92,7 @@ class PygameView:
             self.trade_give_rects[resource] = pygame.Rect(x, give_y, button_w, button_h)
             self.trade_get_rects[resource] = pygame.Rect(x, get_y, button_w, button_h)
 
-        self.trade_execute_rect = pygame.Rect(1110, 985, 150, 42)
+        self.trade_execute_rect = pygame.Rect(1110, 992, 150, 42)
 
 
         self.clock = pygame.time.Clock()
@@ -104,6 +107,9 @@ class PygameView:
             "city": "city.png",
             "road": "road.png",
             "card": "card.png",
+            "knight": "knight.png",
+            "nwr": "nwr.png",
+            "ndh": "ndh.png",
         }
 
         icons = {}
@@ -167,6 +173,10 @@ class PygameView:
             HexResource.ORE: "O",
         }[resource]
 
+    def count_dev_cards(self, state, player_id, card_type_name: str) -> int:
+        player = state.players[player_id]
+        return sum(1 for card in player.development_cards if card.value == card_type_name)
+
     def button_at_pos(self, mouse_pos):
         if self.roll_button_rect.collidepoint(mouse_pos):
             return "roll"
@@ -174,6 +184,10 @@ class PygameView:
             return "end_turn"
         if self.trade_execute_rect.collidepoint(mouse_pos):
             return "trade"
+        if self.play_knight_card_rect.collidepoint(mouse_pos):
+            return "play_knight"
+        if self.buy_dev_card_rect.collidepoint(mouse_pos):
+            return "buy_dev"
         return None
 
     def legal_targets(self, state, action_type):
@@ -198,6 +212,16 @@ class PygameView:
         if pressed == "roll":
             if self.has_action_type(state, ActionType.ROLL_DICE):
                 return state.apply(Action(ActionType.ROLL_DICE))
+            return state
+
+        if pressed == "buy_dev":
+            if self.has_action_type(state, ActionType.BUY_DEVELOPMENT_CARD):
+                return state.apply(Action(ActionType.BUY_DEVELOPMENT_CARD))
+            return state
+
+        if pressed == "play_knight":
+            if self.has_action_type(state, ActionType.PLAY_KNIGHT):
+                return state.apply(Action(ActionType.PLAY_KNIGHT))
             return state
 
         if pressed == "end_turn":
@@ -302,7 +326,7 @@ class PygameView:
             return "AI Myśli..." 
 
         # gracz
-        if state.phase == "ROBBER":
+        if state.phase in ("ROBBER", "ROBBER_FROM_KNIGHT"):
             return "Przesuń złodzieja"
 
         if not state.dice_rolled:
@@ -314,7 +338,7 @@ class PygameView:
         print("handle_click called")
 
         # 1. Obsługa złodzieja: klik w hex
-        if state.phase == "ROBBER":
+        if state.phase in ("ROBBER", "ROBBER_FROM_KNIGHT"):
             hex_id = self.get_clicked_hex(state, mouse_pos)
             if hex_id is not None:
                 print("Clicked hex:", hex_id)
@@ -431,34 +455,122 @@ class PygameView:
                 plus = self.font_small.render("+", True, TEXT_COLOR)
                 self.screen.blit(plus, (x - 10, y + 6))
 
+    def draw_play_cards_panel(self, state):
+        rect = self.play_cards_panel_rect
+        self.draw_panel(rect, "Karty do zagrania")
+
+        human_player_id = 0
+        knight_count = self.count_dev_cards(state, human_player_id, "knight")
+
+        enabled = any(a.type == ActionType.PLAY_KNIGHT for a in state.legal_actions())
+
+        label = f"Rycerz x{knight_count}"
+
+        self.draw_button(
+            self.play_knight_card_rect,
+            label,
+            enabled=enabled and knight_count > 0,
+            hovered=(self.hovered_button == "play_knight"),
+            pressed=(self.pressed_button == "play_knight"),
+        )
+
+    def draw_port_badge(self, center, port_type):
+        cx, cy = center
+
+        # mniejsze koło
+        radius = 18
+        pygame.draw.circle(self.screen, (240, 234, 214), (cx, cy), radius)
+        pygame.draw.circle(self.screen, (80, 80, 80), (cx, cy), radius, 2)
+
+        # bold font dla liczb
+        bold_font = pygame.font.SysFont("arial", 15, bold=True)
+
+        if port_type == PortType.THREE_TO_ONE:
+            txt = bold_font.render("3:1", True, TEXT_COLOR)
+            txt_rect = txt.get_rect(center=(cx, cy))
+            self.screen.blit(txt, txt_rect)
+            return
+
+        resource_map = {
+            PortType.BRICK: HexResource.BRICK,
+            PortType.LUMBER: HexResource.LUMBER,
+            PortType.WOOL: HexResource.WOOL,
+            PortType.GRAIN: HexResource.GRAIN,
+            PortType.ORE: HexResource.ORE,
+        }
+
+        resource = resource_map.get(port_type)
+        if resource is None:
+            txt = bold_font.render("?", True, TEXT_COLOR)
+            txt_rect = txt.get_rect(center=(cx, cy))
+            self.screen.blit(txt, txt_rect)
+            return
+
+        icon = self.resource_icons.get(resource)
+        if icon is not None:
+            # mniejsza ikona
+            small_icon = pygame.transform.smoothscale(icon, (16, 16))
+            # troszkę wyżej
+            icon_rect = small_icon.get_rect(center=(cx, cy - 6))
+            self.screen.blit(small_icon, icon_rect)
+
+        txt = bold_font.render("2:1", True, TEXT_COLOR)
+        txt_rect = txt.get_rect(center=(cx, cy + 8))
+        self.screen.blit(txt, txt_rect)
+
+    def draw_icon_with_count(self, icon_name, x, y, count):
+        icon = self.ui_icons.get(icon_name)
+        if icon is not None:
+            self.screen.blit(icon, icon.get_rect(topleft=(x, y)))
+
+        amount_txt = self.font_small.render(str(count), True, TEXT_COLOR)
+        self.screen.blit(amount_txt, (x + 34, y + 2))
+
     def draw_ports(self, state):
+        board_center_x = 620
+        board_center_y = 380
+
         for (v1, v2), port_type in state.board.ports:
             p1 = self.world_to_screen(state.board.vertex_positions[v1])
             p2 = self.world_to_screen(state.board.vertex_positions[v2])
 
-            mx = (p1[0] + p2[0]) // 2
-            my = (p1[1] + p2[1]) // 2
+            # środek krawędzi
+            mx = (p1[0] + p2[0]) / 2
+            my = (p1[1] + p2[1]) / 2
 
-            # lekkie odsunięcie etykiety na zewnątrz planszy
-            cx = self.width // 2
-            cy = 420
-            dx = mx - cx
-            dy = my - cy
-            length = max(1, (dx * dx + dy * dy) ** 0.5)
+            # wektor krawędzi
+            ex = p2[0] - p1[0]
+            ey = p2[1] - p1[1]
 
-            ox = int(dx / length * 24)
-            oy = int(dy / length * 24)
+            # wektor prostopadły
+            nx = -ey
+            ny = ex
 
-            tx = mx + ox
-            ty = my + oy
+            length = (nx * nx + ny * ny) ** 0.5
+            if length == 0:
+                continue
 
-            badge = pygame.Rect(tx - 22, ty - 12, 44, 24)
-            pygame.draw.rect(self.screen, (235, 230, 210), badge, border_radius=8)
-            pygame.draw.rect(self.screen, (80, 80, 80), badge, 2, border_radius=8)
+            nx /= length
+            ny /= length
 
-            txt = self.font_small.render(self.port_label(port_type), True, TEXT_COLOR)
-            txt_rect = txt.get_rect(center=badge.center)
-            self.screen.blit(txt, txt_rect)
+            # wybierz stronę "na zewnątrz" planszy
+            test1x = mx + nx * 18
+            test1y = my + ny * 18
+            test2x = mx - nx * 18
+            test2y = my - ny * 18
+
+            d1 = (test1x - board_center_x) ** 2 + (test1y - board_center_y) ** 2
+            d2 = (test2x - board_center_x) ** 2 + (test2y - board_center_y) ** 2
+
+            if d2 > d1:
+                nx = -nx
+                ny = -ny
+
+            radius = 18
+            bx = int(mx + nx * radius)
+            by = int(my + ny * radius)
+
+            self.draw_port_badge((bx, by), port_type)
 
     def draw_trade_panel(self, state):
         rect = pygame.Rect(1030, 820, 330, 220)
@@ -632,6 +744,15 @@ class PygameView:
     def draw_buttons(self, state):
         roll_enabled = self.has_action_type(state, ActionType.ROLL_DICE)
         end_enabled = self.has_action_type(state, ActionType.END_TURN)
+        buy_dev_enabled = self.has_action_type(state, ActionType.BUY_DEVELOPMENT_CARD)
+
+        self.draw_button(
+            self.buy_dev_card_rect,
+            "Kup kartę",
+            enabled=buy_dev_enabled,
+            hovered=(self.hovered_button == "buy_dev"),
+            pressed=(self.pressed_button == "buy_dev"),
+        )
 
         self.draw_button(
             self.roll_button_rect,
@@ -755,7 +876,7 @@ class PygameView:
             y += 22
 
     def draw_costs_panel(self):
-        rect = pygame.Rect(1030, 520, 330, 220)
+        rect = pygame.Rect(1030, 470, 330, 220)
         self.draw_panel(rect, "Koszty")
 
         rows = [
@@ -772,8 +893,8 @@ class PygameView:
             y += 40
 
     def draw_players_panel(self, state):
-        # AI - lewa góra
-        ai_rect = pygame.Rect(30, 30, 250, 120)
+        # ---------- AI / Gracz 1 ----------
+        ai_rect = pygame.Rect(30, 30, 250, 150)
         self.draw_panel(ai_rect, "Gracz 1")
 
         ai_color = PLAYER_COLORS[1]
@@ -782,30 +903,38 @@ class PygameView:
         ai_player = state.players[1]
         ai_vp = state.victory_points(1)
 
-        ai_items = [
+        x0 = ai_rect.x + 14
+        y0 = ai_rect.y + 42
+
+        vp_txt = self.font_small.render(f"PZ: {ai_vp}", True, TEXT_COLOR)
+        self.screen.blit(vp_txt, (x0, y0))
+
+        # rząd 2: osady / miasta / drogi
+        y_icons_1 = y0 + 30
+        x = x0
+        row1 = [
             ("settlement", len(ai_player.settlements)),
             ("city", len(ai_player.cities)),
             ("road", len(ai_player.roads)),
         ]
+        for item, amount in row1:
+            self.draw_icon_with_count(item, x, y_icons_1, amount)
+            x += 72
 
-        x = ai_rect.x + 14
-        y = ai_rect.y + 42
+        # rząd 3: rycerze / władza / droga handlowa
+        y_icons_2 = y_icons_1 + 40
+        x = x0
+        row2 = [
+            ("knight", ai_player.played_knights),
+            ("nwr", 0),   # placeholder
+            ("ndh", 0),   # placeholder
+        ]
+        for item, amount in row2:
+            self.draw_icon_with_count(item, x, y_icons_2, amount)
+            x += 72
 
-        vp_txt = self.font_small.render(f"PZ: {ai_vp}", True, TEXT_COLOR)
-        self.screen.blit(vp_txt, (x, y))
-        y += 28
-
-        for item, amount in ai_items:
-            icon = self.ui_icons.get(item)
-            if icon is not None:
-                self.screen.blit(icon, icon.get_rect(topleft=(x, y - 4)))
-
-            amount_txt = self.font_small.render(str(amount), True, TEXT_COLOR)
-            self.screen.blit(amount_txt, (x + 36, y + 2))
-            x += 74
-
-        # Człowiek - lewy dół
-        human_rect = pygame.Rect(30, 890, 250, 150)
+        # ---------- Człowiek / Gracz 0 ----------
+        human_rect = pygame.Rect(30, 900, 250, 150)
         self.draw_panel(human_rect, "Gracz 0")
 
         human_color = PLAYER_COLORS[0]
@@ -814,34 +943,43 @@ class PygameView:
         human_player = state.players[0]
         human_vp = state.victory_points(0)
 
-        x = human_rect.x + 14
-        y = human_rect.y + 42
+        x0 = human_rect.x + 14
+        y0 = human_rect.y + 42
 
         vp_txt = self.font_small.render(f"PZ: {human_vp}", True, TEXT_COLOR)
-        self.screen.blit(vp_txt, (x, y))
-        y += 28
+        self.screen.blit(vp_txt, (x0, y0))
 
-        items = [
+        # rząd 2: osady / miasta / drogi
+        y_icons_1 = y0 + 30
+        x = x0
+        row1 = [
             ("settlement", len(human_player.settlements)),
             ("city", len(human_player.cities)),
             ("road", len(human_player.roads)),
         ]
+        for item, amount in row1:
+            self.draw_icon_with_count(item, x, y_icons_1, amount)
+            x += 72
 
-        x_items = human_rect.x + 14
-        for item, amount in items:
-            icon = self.ui_icons.get(item)
-            if icon is not None:
-                self.screen.blit(icon, icon.get_rect(topleft=(x_items, y - 4)))
+        # rząd 3: rycerze / władza / droga handlowa
+        y_icons_2 = y_icons_1 + 40
+        x = x0
+        row2 = [
+            ("knight", human_player.played_knights),
+            ("nwr", 0),   # placeholder
+            ("ndh", 0),   # placeholder
+        ]
+        for item, amount in row2:
+            self.draw_icon_with_count(item, x, y_icons_2, amount)
+            x += 72
 
-            amount_txt = self.font_small.render(str(amount), True, TEXT_COLOR)
-            self.screen.blit(amount_txt, (x_items + 36, y + 2))
-            x_items += 74
+    def draw_icon_with_count(self, icon_name, x, y, count):
+        icon = self.ui_icons.get(icon_name)
+        if icon is not None:
+            self.screen.blit(icon, icon.get_rect(topleft=(x, y)))
 
-        # placeholdery na karty specjalne
-        y += 40
-        self.draw_placeholder_badge(human_rect.x + 14, y, "R", 0)   # rycerze
-        self.draw_placeholder_badge(human_rect.x + 78, y, "WA", 0)  # władza rycerska
-        self.draw_placeholder_badge(human_rect.x + 152, y, "DH", 0) # droga handlowa
+        amount_txt = self.font_small.render(str(count), True, TEXT_COLOR)
+        self.screen.blit(amount_txt, (x + 34, y + 2))
 
     def draw_highlights(self, state):
         legal_actions = state.legal_actions()
@@ -926,6 +1064,7 @@ class PygameView:
         self.draw_edges(state)
         self.draw_vertices(state)
 
+        self.draw_play_cards_panel(state)
         self.draw_players_panel(state)
         self.draw_status_panel(state)
         self.draw_costs_panel()

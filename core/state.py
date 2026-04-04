@@ -2,7 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Set
 import random
-
+from enum import Enum
 from .board import Board, HexResource
 from .actions import Action, ActionType
 from . import rules
@@ -13,6 +13,8 @@ class PlayerState:
     roads: Set[int] = field(default_factory=set)
     settlements: Set[int] = field(default_factory=set)
     cities: Set[int] = field(default_factory=set)
+    development_cards: List[DevelopmentCard] = field(default_factory=list)
+    played_knights: int = 0
 
     resources: Dict[HexResource, int] = field(default_factory=lambda: {
         HexResource.BRICK: 0,
@@ -22,12 +24,18 @@ class PlayerState:
         HexResource.ORE: 0,
     })
 
+class DevelopmentCard(Enum):
+    KNIGHT = "knight"
+    VICTORY_POINT = "victory_point"
+    PROGRESS = "progress"
 
 @dataclass
 class GameState:
     board: Board
     players: List[PlayerState]
     current_player: int = 0
+
+    development_deck: List[DevelopmentCard] = field(default_factory=list)
 
     occupied_vertices: Set[int] = field(default_factory=set)
     occupied_edges: Set[int] = field(default_factory=set)
@@ -48,11 +56,14 @@ class GameState:
                     roads=set(p.roads),
                     settlements=set(p.settlements),
                     cities=set(p.cities),
+                    development_cards=list(p.development_cards),
+                    played_knights=p.played_knights,
                     resources=dict(p.resources),
                 )
                 for p in self.players
             ],
             current_player=self.current_player,
+            development_deck=list(self.development_deck),
             occupied_vertices=set(self.occupied_vertices),
             occupied_edges=set(self.occupied_edges),
             phase=self.phase,
@@ -61,6 +72,16 @@ class GameState:
             last_roll=self.last_roll,
             robber_hex=self.robber_hex,
         )
+    
+    @staticmethod
+    def default_development_deck() -> List[DevelopmentCard]:
+        deck = (
+            [DevelopmentCard.KNIGHT] * 14 +
+            [DevelopmentCard.VICTORY_POINT] * 5 +
+            [DevelopmentCard.PROGRESS] * 6
+        )
+        random.shuffle(deck)
+        return deck
 
     def legal_actions(self) -> List[Action]:
         actions: List[Action] = []
@@ -80,7 +101,7 @@ class GameState:
             return actions
 
         # faza złodzieja
-        if self.phase == "ROBBER":
+        if self.phase in ("ROBBER", "ROBBER_FROM_KNIGHT"):
             for hex_id in range(len(self.board.hex_vertices)):
                 if rules.can_move_robber(self, hex_id):
                     actions.append(Action(ActionType.MOVE_ROBBER, hex_id))
@@ -91,6 +112,8 @@ class GameState:
             return [Action(ActionType.ROLL_DICE)]
 
         # główna faza po rzucie
+        player = self.players[self.current_player]
+
         for v in range(len(self.board.vertex_positions)):
             if rules.can_build_settlement(self, v):
                 actions.append(Action(ActionType.BUILD_SETTLEMENT, v))
@@ -102,6 +125,12 @@ class GameState:
         for v in range(len(self.board.vertex_positions)):
             if rules.can_build_city(self, v):
                 actions.append(Action(ActionType.BUILD_CITY, v))
+
+        if rules.can_buy_development_card(self):
+            actions.append(Action(ActionType.BUY_DEVELOPMENT_CARD))
+
+        if DevelopmentCard.KNIGHT in player.development_cards:
+            actions.append(Action(ActionType.PLAY_KNIGHT))
 
         trade_resources = [
             HexResource.BRICK,
@@ -167,8 +196,16 @@ class GameState:
                 self.produce_resources(roll)
             return
 
+        # zagranie rycerza
+        if action.type == ActionType.PLAY_KNIGHT and self.phase == "MAIN":
+            if DevelopmentCard.KNIGHT in player.development_cards:
+                player.development_cards.remove(DevelopmentCard.KNIGHT)
+                player.played_knights += 1
+                self.phase = "ROBBER_FROM_KNIGHT"
+            return
+
         # przesunięcie złodzieja
-        if action.type == ActionType.MOVE_ROBBER and self.phase == "ROBBER":
+        if action.type == ActionType.MOVE_ROBBER and self.phase in ("ROBBER", "ROBBER_FROM_KNIGHT"):
             hex_id = action.target
             if hex_id is not None and rules.can_move_robber(self, hex_id):
                 self.robber_hex = hex_id
@@ -240,6 +277,13 @@ class GameState:
                 ratio = rules.get_player_trade_ratio(self, self.current_player, give_resource)
                 player.resources[give_resource] -= ratio
                 player.resources[get_resource] += 1
+            return
+
+        if action.type == ActionType.BUY_DEVELOPMENT_CARD:
+            if rules.can_buy_development_card(self):
+                rules.pay_cost(player, rules.DEVELOPMENT_CARD_COST)
+                drawn = self.development_deck.pop()
+                player.development_cards.append(drawn)
             return
 
         # koniec tury
@@ -336,7 +380,8 @@ class GameState:
 
     def victory_points(self, player_id: int) -> int:
         player = self.players[player_id]
-        return len(player.settlements) + 2 * len(player.cities)
+        vp_cards = sum(1 for card in player.development_cards if card == DevelopmentCard.VICTORY_POINT)
+        return len(player.settlements) + 2 * len(player.cities) + vp_cards
 
     def is_terminal(self) -> bool:
         return any(self.victory_points(i) >= 10 for i in range(len(self.players)))
@@ -349,8 +394,8 @@ class GameState:
             if i != player_id
         )
 
-        if my_vp >= 5 and my_vp > opp_vp:
+        if my_vp >= 10 and my_vp > opp_vp:
             return 1.0
-        if opp_vp >= 5 and opp_vp > my_vp:
+        if opp_vp >= 10 and opp_vp > my_vp:
             return 0.0
         return 0.5
