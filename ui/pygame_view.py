@@ -4,7 +4,7 @@ import os
 from core.actions import Action, ActionType
 from core.board import HexResource
 from core.board import HexResource, PortType
-from core import rules
+from core import rules, state
 
 BACKGROUND = (245, 240, 220)
 EDGE_COLOR = (80, 80, 80)
@@ -61,36 +61,95 @@ class PygameView:
         self.screen = pygame.display.set_mode((width, height))
         pygame.display.set_caption("Catan - Debug View")
 
+        self.info_button_rect = pygame.Rect(self.width - 60, 20, 40, 40)
+
         self.font_small = pygame.font.SysFont("arial", 18)
         self.font_medium = pygame.font.SysFont("arial", 24, bold=True)
         self.font_large = pygame.font.SysFont("arial", 30, bold=True)
-        self.play_cards_panel_rect = pygame.Rect(840, 845, 170, 190)
-        self.play_knight_card_rect = pygame.Rect(858, 885, 134, 34)
+
+        self.play_cards_panel_rect = pygame.Rect(840, 820, 170, 220)
+        self.play_knight_card_rect = pygame.Rect(850, 855, 132, 32)
+        self.play_road_building_rect = pygame.Rect(850, 890, 132, 32)
+        self.play_year_of_plenty_rect = pygame.Rect(850, 925, 132, 32)
+        self.play_monopoly_rect = pygame.Rect(850, 960, 132, 32)
+        self.vp_card_rect = pygame.Rect(850, 995, 132, 32)
+
         self.roll_button_rect = pygame.Rect(1030, 705, 140, 42)
         self.end_turn_button_rect = pygame.Rect(1190, 705, 140, 42)
         self.buy_dev_card_rect = pygame.Rect(1110, 752, 140, 42)
+
         self.resource_icons = self.load_resource_icons()
         self.ui_icons = self.load_ui_icons()
         self.hovered_button = None
         self.pressed_button = None
         self.selected_give_resource = None
         self.selected_get_resource = None
-
+        self.pending_card_action = None
 
         self.trade_give_rects = {}
         self.trade_get_rects = {}
 
+        # --- TRADE PANEL ---
         start_x = 1035
         give_y = 880
         get_y = 935
-        button_w = 40
-        button_h = 40
-        gap = 8
+
+        trade_button_w = 40
+        trade_button_h = 40
+        trade_gap = 8
+
+        # --- MODAL ---
+        self.active_modal = None
+        self.modal_data = {}
+        self.pending_card_action = None
+
+        # mały modal do kart
+        self.card_modal_rect = pygame.Rect(470, 300, 460, 300)
+        self.card_modal_close_rect = pygame.Rect(870, 315, 40, 30)
+
+        # duży modal do pomocy
+        self.help_modal_rect = pygame.Rect(170, 80, 1060, 860)
+        self.help_modal_close_rect = pygame.Rect(1165, 95, 40, 30)
+
+        self.help_tab = "ui"
+        self.help_page = 0
+
+        self.help_tab_ui_rect = pygame.Rect(230, 145, 170, 40)
+        self.help_tab_rules_rect = pygame.Rect(410, 145, 170, 40)
+
+        self.help_prev_rect = pygame.Rect(1030, 145, 40, 40)
+        self.help_next_rect = pygame.Rect(1080, 145, 40, 40)
+
+
+        self.modal_resource_rects_row1 = {}
+        self.modal_resource_rects_row2 = {}
+
+        modal_start_x = 550
+        modal_y1 = 395
+        modal_y2 = 465
+        modal_button_w = 48
+        modal_button_h = 48
+        modal_gap = 14
 
         for i, resource in enumerate(TRADE_RESOURCES):
-            x = start_x + 72 + i * (button_w + gap)
-            self.trade_give_rects[resource] = pygame.Rect(x, give_y, button_w, button_h)
-            self.trade_get_rects[resource] = pygame.Rect(x, get_y, button_w, button_h)
+            x = modal_start_x + i * (modal_button_w + modal_gap)
+            self.modal_resource_rects_row1[resource] = pygame.Rect(
+                x, modal_y1, modal_button_w, modal_button_h
+            )
+            self.modal_resource_rects_row2[resource] = pygame.Rect(
+                x, modal_y2, modal_button_w, modal_button_h
+            )
+
+        self.modal_confirm_rect = pygame.Rect(610, 535, 180, 42)
+
+        for i, resource in enumerate(TRADE_RESOURCES):
+            x = start_x + 72 + i * (trade_button_w + trade_gap)
+            self.trade_give_rects[resource] = pygame.Rect(
+                x, give_y, trade_button_w, trade_button_h
+            )
+            self.trade_get_rects[resource] = pygame.Rect(
+                x, get_y, trade_button_w, trade_button_h
+            )
 
         self.trade_execute_rect = pygame.Rect(1110, 992, 150, 42)
 
@@ -122,6 +181,16 @@ class PygameView:
 
         return icons
 
+    def current_modal_rect(self):
+        if self.active_modal == "help":
+            return self.help_modal_rect
+        return self.card_modal_rect
+
+    def current_modal_close_rect(self):
+        if self.active_modal == "help":
+            return self.help_modal_close_rect
+        return self.card_modal_close_rect
+
     def load_resource_icons(self):
         base_dir = os.path.dirname(os.path.dirname(__file__))
         pictures_dir = os.path.join(base_dir, "pictures")
@@ -145,6 +214,14 @@ class PygameView:
             icons[resource] = image
 
         return icons
+
+    def open_modal(self, modal_type, **data):
+        self.active_modal = modal_type
+        self.modal_data = dict(data)
+
+    def close_modal(self):
+        self.active_modal = None
+        self.modal_data = {}
 
     def port_label(self, port_type):
         if port_type == PortType.THREE_TO_ONE:
@@ -175,9 +252,27 @@ class PygameView:
 
     def count_dev_cards(self, state, player_id, card_type_name: str) -> int:
         player = state.players[player_id]
-        return sum(1 for card in player.development_cards if card.value == card_type_name)
+
+        old_count = sum(
+            1 for card in player.development_cards
+            if card.value == card_type_name
+        )
+        new_count = sum(
+            1 for card in player.new_development_cards
+            if card.value == card_type_name
+        )
+
+        return old_count + new_count
 
     def button_at_pos(self, mouse_pos):
+        if self.active_modal is not None:
+            if self.modal_confirm_rect.collidepoint(mouse_pos):
+                return "modal_confirm"
+            if self.current_modal_close_rect().collidepoint(mouse_pos):
+                return "modal_close"
+            return None
+        if self.info_button_rect.collidepoint(mouse_pos):
+            return "info"        
         if self.roll_button_rect.collidepoint(mouse_pos):
             return "roll"
         if self.end_turn_button_rect.collidepoint(mouse_pos):
@@ -188,6 +283,12 @@ class PygameView:
             return "play_knight"
         if self.buy_dev_card_rect.collidepoint(mouse_pos):
             return "buy_dev"
+        if self.play_road_building_rect.collidepoint(mouse_pos):
+            return "play_road_building"
+        if self.play_year_of_plenty_rect.collidepoint(mouse_pos):
+            return "play_year_of_plenty"
+        if self.play_monopoly_rect.collidepoint(mouse_pos):
+            return "play_monopoly"
         return None
 
     def legal_targets(self, state, action_type):
@@ -209,6 +310,11 @@ class PygameView:
         if pressed is None or released_on != pressed:
             return None
 
+        if pressed == "info":
+            self.help_tab = "ui"
+            self.open_modal("help")
+            return state
+
         if pressed == "roll":
             if self.has_action_type(state, ActionType.ROLL_DICE):
                 return state.apply(Action(ActionType.ROLL_DICE))
@@ -227,6 +333,27 @@ class PygameView:
         if pressed == "end_turn":
             if self.has_action_type(state, ActionType.END_TURN):
                 return state.apply(Action(ActionType.END_TURN))
+            return state
+
+        if pressed == "play_road_building":
+            if self.has_action_type(state, ActionType.PLAY_ROAD_BUILDING):
+                return state.apply(Action(ActionType.PLAY_ROAD_BUILDING))
+            return state
+
+        if pressed == "play_year_of_plenty":
+            if self.has_action_type(state, ActionType.PLAY_YEAR_OF_PLENTY):
+                self.pending_card_action = "year_of_plenty"
+                self.open_modal(
+                    "choose_two_resources",
+                    selected_resource_1=None,
+                    selected_resource_2=None,
+                )
+            return state
+
+        if pressed == "play_monopoly":
+            if self.has_action_type(state, ActionType.PLAY_MONOPOLY):
+                self.pending_card_action = "monopoly"
+                self.open_modal("choose_one_resource", selected_resource=None)
             return state
 
         if pressed == "trade":
@@ -334,8 +461,84 @@ class PygameView:
 
         return "Akcja lub koniec tury"
 
+    def handle_modal_click(self, mouse_pos):
+        if self.active_modal is None:
+            return None
+
+        if self.active_modal == "help":
+            if self.help_tab_ui_rect.collidepoint(mouse_pos):
+                self.help_tab = "ui"
+                return "updated"
+
+            if self.help_tab_rules_rect.collidepoint(mouse_pos):
+                self.help_tab = "rules"
+                return "updated"
+            
+        close_rect = self.current_modal_close_rect()
+
+        if close_rect.collidepoint(mouse_pos):
+            self.close_modal()
+            return "closed"
+
+        if self.active_modal == "help":
+            if self.help_tab_ui_rect.collidepoint(mouse_pos):
+                self.help_tab = "ui"
+                self.help_page = 0
+                return "updated"
+
+            if self.help_tab_rules_rect.collidepoint(mouse_pos):
+                self.help_tab = "rules"
+                self.help_page = 0
+                return "updated"
+
+            if self.help_prev_rect.collidepoint(mouse_pos):
+                self.help_page = max(0, self.help_page - 1)
+                return "updated"
+
+            if self.help_next_rect.collidepoint(mouse_pos):
+                self.help_page = min(1, self.help_page + 1)
+                return "updated"
+
+        if self.modal_confirm_rect.collidepoint(mouse_pos):
+            if self.active_modal == "choose_one_resource":
+                if self.modal_data.get("selected_resource") is not None:
+                    return {
+                        "type": "confirmed_one_resource",
+                        "resource": self.modal_data["selected_resource"],
+                    }
+
+            elif self.active_modal == "choose_two_resources":
+                r1 = self.modal_data.get("selected_resource_1")
+                r2 = self.modal_data.get("selected_resource_2")
+                if r1 is not None and r2 is not None:
+                    return {
+                        "type": "confirmed_two_resources",
+                        "resources": [r1, r2],
+                    }
+
+        for resource, rect in self.modal_resource_rects_row1.items():
+            if rect.collidepoint(mouse_pos):
+                if self.active_modal == "choose_one_resource":
+                    self.modal_data["selected_resource"] = resource
+                    return "updated"
+
+                elif self.active_modal == "choose_two_resources":
+                    self.modal_data["selected_resource_1"] = resource
+                    return "updated"
+
+        for resource, rect in self.modal_resource_rects_row2.items():
+            if rect.collidepoint(mouse_pos):
+                if self.active_modal == "choose_two_resources":
+                    self.modal_data["selected_resource_2"] = resource
+                    return "updated"
+
+        return "modal_open"
+
     def handle_click(self, state, mouse_pos):
         print("handle_click called")
+
+        if self.active_modal is not None:
+            return state
 
         # 1. Obsługa złodzieja: klik w hex
         if state.phase in ("ROBBER", "ROBBER_FROM_KNIGHT"):
@@ -411,6 +614,8 @@ class PygameView:
             points.append((int(px), int(py)))
         return points
 
+
+
     def draw_resource_icon(self, center, resource):
         icon = self.resource_icons.get(resource)
         if icon is None:
@@ -455,23 +660,517 @@ class PygameView:
                 plus = self.font_small.render("+", True, TEXT_COLOR)
                 self.screen.blit(plus, (x - 10, y + 6))
 
+    def draw_modal(self):
+        if self.active_modal is None:
+            return
+
+        overlay = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 90))
+        self.screen.blit(overlay, (0, 0))
+
+        modal_rect = self.current_modal_rect()
+        close_rect = self.current_modal_close_rect()
+
+        self.draw_panel(modal_rect)
+
+        pygame.draw.rect(self.screen, BUTTON_BG, close_rect, border_radius=8)
+        pygame.draw.rect(self.screen, BUTTON_BORDER, close_rect, 2, border_radius=8)
+        close_txt = self.font_small.render("X", True, TEXT_COLOR)
+        close_txt_rect = close_txt.get_rect(center=close_rect.center)
+        self.screen.blit(close_txt, close_txt_rect)
+
+        if self.active_modal == "choose_one_resource":
+            self.draw_choose_one_resource_modal()
+
+        elif self.active_modal == "choose_two_resources":
+            self.draw_choose_two_resources_modal()
+
+        elif self.active_modal == "help":
+            self.draw_help_modal()
+
+    def draw_help_modal(self):
+        modal_rect = self.help_modal_rect
+
+        title = self.font_large.render("Pomoc", True, TEXT_COLOR)
+        self.screen.blit(title, (modal_rect.x + 25, modal_rect.y + 20))
+
+        self.draw_tab(self.help_tab_ui_rect, "Interfejs", self.help_tab == "ui")
+        self.draw_tab(self.help_tab_rules_rect, "Zasady", self.help_tab == "rules")
+
+        # nawigacja stron
+        pygame.draw.rect(self.screen, BUTTON_BG, self.help_prev_rect, border_radius=8)
+        pygame.draw.rect(self.screen, BUTTON_BORDER, self.help_prev_rect, 2, border_radius=8)
+        pygame.draw.rect(self.screen, BUTTON_BG, self.help_next_rect, border_radius=8)
+        pygame.draw.rect(self.screen, BUTTON_BORDER, self.help_next_rect, 2, border_radius=8)
+
+        prev_txt = self.font_medium.render("←", True, TEXT_COLOR)
+        next_txt = self.font_medium.render("→", True, TEXT_COLOR)
+        self.screen.blit(prev_txt, prev_txt.get_rect(center=self.help_prev_rect.center))
+        self.screen.blit(next_txt, next_txt.get_rect(center=self.help_next_rect.center))
+
+        page_txt = self.font_small.render(f"Strona {self.help_page + 1}/2", True, TEXT_COLOR)
+        self.screen.blit(page_txt, (modal_rect.x + 860, modal_rect.y + 155))
+
+        if self.help_tab == "ui":
+            if self.help_page == 0:
+                self.draw_help_ui_page_1()
+            else:
+                self.draw_help_ui_page_2()
+        else:
+            if self.help_page == 0:
+                self.draw_help_rules_page_1()
+            else:
+                self.draw_help_rules_page_2()
+
+    def draw_tab(self, rect, text, active):
+        color = PANEL_BG if active else BUTTON_BG
+
+        pygame.draw.rect(self.screen, color, rect, border_radius=8)
+        pygame.draw.rect(self.screen, BUTTON_BORDER, rect, 2, border_radius=8)
+
+        txt = self.font_small.render(text, True, TEXT_COLOR)
+        txt_rect = txt.get_rect(center=rect.center)
+        self.screen.blit(txt, txt_rect)
+
+    def draw_help_ui_page_1(self):
+        modal_rect = self.help_modal_rect
+
+        guide_rect = pygame.Rect(modal_rect.x + 30, modal_rect.y + 210, 980, 470)
+        pygame.draw.rect(self.screen, (245, 242, 230), guide_rect, border_radius=12)
+        pygame.draw.rect(self.screen, PANEL_BORDER, guide_rect, 2, border_radius=12)
+
+        boxes = [
+            (pygame.Rect(guide_rect.x + 710, guide_rect.y + 20, 230, 80), "Status gry",
+             ["Pokazuje fazę gry,", "aktywną turę i możliwe ruchy"]),
+            (pygame.Rect(guide_rect.x + 710, guide_rect.y + 150, 230, 100), "Koszty",
+             ["Ściągawka kosztów", "budowy dróg, osad,", "miast i kart rozwoju."]),
+            (pygame.Rect(guide_rect.x + 710, guide_rect.y + 260, 230, 90), "Przyciski tury",
+             ["Rzut kośćmi,", "zakup karty rozwoju", "i zakończenie tury."]),
+            (pygame.Rect(guide_rect.x + 510, guide_rect.y + 290, 175, 170), "Karty do zagrania",
+             ["Tutaj zagrywasz", "rycerza, monopol,", "wynalazek i budowę dróg."]),
+            (pygame.Rect(guide_rect.x + 710, guide_rect.y + 365, 230, 95), "Handel",
+             ["Wybierz co oddajesz", "i co otrzymujesz", "z banku lub portu."]),
+            (pygame.Rect(guide_rect.x + 240, guide_rect.y + 380, 230, 60), "Ekwipunek",
+             ["Aktualne zasoby gracza."]),
+            (pygame.Rect(guide_rect.x + 20, guide_rect.y + 330, 200, 120), "Panel gracza",
+             ["Punkty zwycięstwa,", "budowle, rycerze", "i bonusy specjalne."]),
+             (pygame.Rect(guide_rect.x + 20, guide_rect.y + 20, 200, 120), "Panel przeciwnika",
+             ["Punkty zwycięstwa,", "budowle, rycerze", "i bonusy specjalne."]),
+        ]
+
+        for rect, title, lines in boxes:
+            pygame.draw.rect(self.screen, (230, 226, 210), rect, border_radius=10)
+            pygame.draw.rect(self.screen, PANEL_BORDER, rect, 2, border_radius=10)
+
+            title_txt = self.font_small.render(title, True, TEXT_COLOR)
+            self.screen.blit(title_txt, (rect.x + 10, rect.y + 8))
+
+            y = rect.y + 32
+            for line in lines:
+                txt = self.font_small.render(line, True, TEXT_COLOR)
+                self.screen.blit(txt, (rect.x + 10, y))
+                y += 18
+
+    def draw_help_ui_page_2(self):
+        modal_rect = self.help_modal_rect
+
+        title = self.font_medium.render("Kolory, ikony i kliknięcia", True, TEXT_COLOR)
+        self.screen.blit(title, (modal_rect.x + 30, modal_rect.y + 220))
+
+        lines = [
+            "Kolorowe linie oznaczają drogi graczy.",
+            "Kolorowe kółka oznaczają osady.",
+            "Kolorowe kwadraty oznaczają miasta.",
+            "Żółte podświetlenie pokazuje legalne miejsca budowy lub ruch złodzieja.",
+            "Czarne kółko oznacza pozycje złodzieja.",
+            "",
+            "Jak budować:",
+            "- aby wybudować drogę, kliknij podświetloną krawędź",
+            "- aby wybudować osadę, kliknij podświetlony wierzchołek",
+            "- aby ulepszyć osadę do miasta, kliknij własną podświetloną osadę",
+            "- aby przesunąć złodzieja, kliknij podświetlony heks",
+            "",
+            "Porty:",
+            "- znacznik 3:1 oznacza port ogólny",
+            "- znacznik 2:1 z ikoną zasobu oznacza port specjalny",
+        ]
+
+        y = modal_rect.y + 270
+        for line in lines:
+            txt = self.font_small.render(line, True, TEXT_COLOR)
+            self.screen.blit(txt, (modal_rect.x + 30, y))
+            y += 24
+
+        legend_items = [
+            ("settlement", "Osada"),
+            ("city", "Miasto"),
+            ("road", "Droga"),
+            ("knight", "Rycerz"),
+            ("nwr", "Najwyższa władza rycerska"),
+            ("ndh", "Najdłuższa droga handlowa"),
+            ("card", "Karta rozwoju"),
+        ]
+
+        x = modal_rect.x + 620
+        y = modal_rect.y + 260
+        for icon_name, label in legend_items:
+            icon = self.ui_icons.get(icon_name)
+            if icon:
+                self.screen.blit(icon, icon.get_rect(topleft=(x, y)))
+            txt = self.font_small.render(label, True, TEXT_COLOR)
+            self.screen.blit(txt, (x + 40, y + 5))
+            y += 42
+
+    def draw_help_rules_page_1(self):
+        modal_rect = self.help_modal_rect
+
+        lines = [
+            "Cel gry",
+            "Zdobądź 10 punktów zwycięstwa szybciej niż przeciwnik.",
+            "",
+            "Punkty zwycięstwa",
+            "- osada = 1",
+            "- miasto = 2",
+            "- najdłuższa droga handlowa = 2",
+            "- najwyższa władza rycerska = 2",
+            "- karta Punkt Zwycięstwa = 1",
+            "",
+            "Przebieg tury",
+            "1. Rzuć kośćmi.",
+            "2. Odbierz surowce z odpowiednich pól.",
+            "3. Buduj, handluj i zagrywaj karty.",
+            "4. Zakończ turę.",
+            "",
+            "Produkcja",
+            "Każda budowla przy polu z wylosowanym numerem produkuje surowce.",
+            "Osada daje 1 surowiec, miasto daje 2 surowce.",
+            "Pole zablokowane przez złodzieja nie produkuje.",
+        ]
+
+        self.draw_help_text_block(lines, start_x=modal_rect.x + 30, start_y=modal_rect.y + 220)
+
+        # ikonki po prawej
+        icon_x = modal_rect.x + 700
+        icon_y = modal_rect.y + 230
+        items = [
+            ("settlement", "1 punkt"),
+            ("city", "2 punkty"),
+            ("ndh", "bonus +2"),
+            ("nwr", "bonus +2"),
+            ("card", "PZ = 1"),
+        ]
+
+        for icon_name, label in items:
+            icon = self.ui_icons.get(icon_name)
+            if icon:
+                self.screen.blit(icon, icon.get_rect(topleft=(icon_x, icon_y)))
+            txt = self.font_small.render(label, True, TEXT_COLOR)
+            self.screen.blit(txt, (icon_x + 40, icon_y + 5))
+            icon_y += 45
+
+
+    def draw_help_rules_page_2(self):
+        modal_rect = self.help_modal_rect
+
+        lines = [
+            "Złodziej",
+            "Przy rzucie 7 lub po zagraniu rycerza przesuwasz złodzieja.",
+            "Pole ze złodziejem nie produkuje surowców,",
+            "a ty zabierasz 1 losowy surowiec od przeciwnika, jeśli ma budowlę przy tym polu.",
+            "",
+            "Budowa",
+            "- droga = cegła + drewno",
+            "- osada = cegła + drewno + wełna + zboże",
+            "- miasto = 2 zboże + 3 ruda",
+            "- karta rozwoju = wełna + zboże + ruda",
+            "",
+            "Handel",
+            "Bank: 4:1 - oddajesz 4 surowce jednego rodzaju, dostajesz 1 dowolny surowiec.",
+            "Port ogólny: 3:1 - oddajesz 3 surowce jednego rodzaju, dostajesz 1 dowolny surowiec.",
+            "Port specjalny: 2:1 dla wskazanego surowca - oddajesz 2 surowce tego rodzaju, dostajesz 1 dowolny surowiec.",
+            "",
+            "Karty rozwoju",
+            "- Rycerz: przesuwa złodzieja",
+            "- Budowa dróg: budujesz 2 darmowe drogi",
+            "- Wynalazek: bierzesz 2 dowolne surowce",
+            "- Monopol: przejmujesz od innych cały zapas wybranego surowca",
+            "- Punkt Zwycięstwa: daje 1 punkt zwycięstwa",
+        ]
+
+        self.draw_help_text_block(lines, start_x=modal_rect.x + 30, start_y=modal_rect.y + 220)
+
+        icon_x = modal_rect.x + 700
+        icon_y = modal_rect.y + 230
+        resource_items = [
+            (HexResource.BRICK, "cegła"),
+            (HexResource.LUMBER, "drewno"),
+            (HexResource.WOOL, "wełna"),
+            (HexResource.GRAIN, "zboże"),
+            (HexResource.ORE, "ruda"),
+        ]
+
+        for resource, label in resource_items:
+            icon = self.resource_icons.get(resource)
+            if icon:
+                self.screen.blit(icon, icon.get_rect(topleft=(icon_x, icon_y)))
+            txt = self.font_small.render(label, True, TEXT_COLOR)
+            self.screen.blit(txt, (icon_x + 40, icon_y + 5))
+            icon_y += 45
+
+    def draw_help_text_block(self, lines, start_x, start_y):
+        y = start_y
+
+        headers = {
+            "Cel gry",
+            "Punkty zwycięstwa",
+            "Przebieg tury",
+            "Produkcja",
+            "Złodziej",
+            "Budowa",
+            "Handel",
+            "Karty rozwoju",
+        }
+
+        for line in lines:
+            if line == "":
+                y += 10
+                continue
+
+            if line in headers:
+                txt = self.font_medium.render(line, True, TEXT_COLOR)
+                self.screen.blit(txt, (start_x, y))
+                y += 28
+            else:
+                txt = self.font_small.render(line, True, TEXT_COLOR)
+                self.screen.blit(txt, (start_x, y))
+                y += 22
+
+    def draw_help_callout(self, box_pos, target_pos, title, body):
+        bx, by = box_pos
+        tx, ty = target_pos
+
+        bubble_rect = pygame.Rect(bx, by, 140, 58)
+        pygame.draw.rect(self.screen, (255, 248, 240), bubble_rect, border_radius=10)
+        pygame.draw.rect(self.screen, (180, 60, 60), bubble_rect, 2, border_radius=10)
+
+        pygame.draw.line(self.screen, (200, 40, 40), (bubble_rect.right, bubble_rect.centery), (tx, ty), 3)
+
+        title_txt = self.font_small.render(title, True, (160, 20, 20))
+        self.screen.blit(title_txt, (bubble_rect.x + 8, bubble_rect.y + 6))
+
+        lines = body.split("\n")
+        y = bubble_rect.y + 26
+        for line in lines[:2]:
+            txt = self.font_small.render(line, True, TEXT_COLOR)
+            self.screen.blit(txt, (bubble_rect.x + 8, y))
+            y += 16
+
+    def draw_help_rules(self):
+        lines = [
+            "Cel gry",
+            "Zdobądź 10 punktów zwycięstwa szybciej niż przeciwnik.",
+            "",
+            "Jak zdobywa się punkty",
+            "- osada = 1 punkt",
+            "- miasto = 2 punkty",
+            "- najdłuższa droga handlowa = 2 punkty",
+            "- najwyższa władza rycerska = 2 punkty",
+            "- karta Punkt Zwycięstwa = 1 punkt",
+            "",
+            "Przebieg tury",
+            "1. Rzuć kośćmi.",
+            "2. Odbierz surowce z pól z wylosowanym numerem.",
+            "3. Buduj, handluj i zagrywaj karty rozwoju.",
+            "4. Zakończ turę.",
+            "",
+            "Produkcja surowców",
+            "Jeśli numer pola zgadza się z wynikiem rzutu, budowle przy tym polu produkują:",
+            "- osada = 1 surowiec",
+            "- miasto = 2 surowce",
+            "Pole zablokowane przez złodzieja nie produkuje.",
+            "",
+            "Złodziej",
+            "Przy rzucie 7 albo po zagraniu rycerza przesuwasz złodzieja na wybrane pole.",
+            "Pole z złodziejem nie produkuje. Jeśli na polu stoi przeciwnik, kradniesz 1 losowy surowiec.",
+            "",
+            "Budowa",
+            "- droga: cegła + drewno",
+            "- osada: cegła + drewno + wełna + zboże",
+            "- miasto: 2 zboże + 3 ruda",
+            "- karta rozwoju: wełna + zboże + ruda",
+            "",
+            "Handel",
+            "Standardowo bank handluje 4:1.",
+            "Port ogólny daje kurs 3:1.",
+            "Port specjalny daje kurs 2:1 dla danego surowca.",
+            "",
+            "Karty rozwoju",
+            "- Rycerz: przesuwa złodzieja",
+            "- Budowa dróg: budujesz 2 darmowe drogi",
+            "- Wynalazek: bierzesz 2 dowolne surowce z banku",
+            "- Monopol: wybierasz surowiec, inni gracze oddają Ci cały jego zapas",
+            "- Punkt Zwycięstwa: daje ukryty punkt zwycięstwa",
+        ]
+
+        self.draw_help_text_block(lines)
+
+    def draw_help_text_block(self, lines, start_x, start_y):
+        y = start_y
+
+        headers = {
+            "Cel gry",
+            "Punkty zwycięstwa",
+            "Przebieg tury",
+            "Produkcja",
+            "Produkcja surowców",
+            "Złodziej",
+            "Budowa",
+            "Handel",
+            "Karty rozwoju",
+            "Jak zdobywa się punkty",
+        }
+
+        for line in lines:
+            if line == "":
+                y += 10
+                continue
+
+            if line in headers:
+                txt = self.font_medium.render(line, True, TEXT_COLOR)
+                self.screen.blit(txt, (start_x, y))
+                y += 28
+            else:
+                txt = self.font_small.render(line, True, TEXT_COLOR)
+                self.screen.blit(txt, (start_x, y))
+                y += 22
+
+    def draw_help_text(self, lines, start_x, start_y):
+        y = start_y
+
+        for line in lines:
+            txt = self.font_small.render(line, True, TEXT_COLOR)
+            self.screen.blit(txt, (start_x, y))
+            y += 22
+
+    def draw_choose_one_resource_modal(self):
+        modal_rect = self.card_modal_rect
+        title = self.font_medium.render("Wybierz surowiec", True, TEXT_COLOR)
+        self.screen.blit(title, (modal_rect.x + 20, modal_rect.y + 20))
+
+        subtitle = self.font_small.render("Kliknij jeden surowiec.", True, TEXT_COLOR)
+        self.screen.blit(subtitle, (modal_rect.x + 20, modal_rect.y + 60))
+
+        selected = self.modal_data.get("selected_resource")
+
+        for resource, rect in self.modal_resource_rects_row1.items():
+            self.draw_resource_button(
+                rect,
+                resource,
+                selected=(selected == resource),
+                enabled=True,
+            )
+
+        confirm_enabled = selected is not None
+
+        self.draw_primary_button(
+            self.modal_confirm_rect,
+            "Potwierdź",
+            enabled=confirm_enabled,
+            hovered=(self.hovered_button == "modal_confirm"),
+            pressed=(self.pressed_button == "modal_confirm"),
+        )
+
+    def draw_choose_two_resources_modal(self):
+        modal_rect = self.card_modal_rect
+        title = self.font_medium.render("Wybierz 2 surowce", True, TEXT_COLOR)
+        self.screen.blit(title, (modal_rect.x + 20, modal_rect.y + 20))
+
+        selected_1 = self.modal_data.get("selected_resource_1")
+        selected_2 = self.modal_data.get("selected_resource_2")
+
+        subtitle1 = self.font_small.render("Wybór 1:", True, TEXT_COLOR)
+        self.screen.blit(subtitle1, (modal_rect.x + 20, modal_rect.y + 95))
+
+        subtitle2 = self.font_small.render("Wybór 2:", True, TEXT_COLOR)
+        self.screen.blit(subtitle2, (modal_rect.x + 20, modal_rect.y + 165))
+
+        for resource, rect in self.modal_resource_rects_row1.items():
+            self.draw_resource_button(
+                rect,
+                resource,
+                selected=(selected_1 == resource),
+                enabled=True,
+            )
+
+        for resource, rect in self.modal_resource_rects_row2.items():
+            self.draw_resource_button(
+                rect,
+                resource,
+                selected=(selected_2 == resource),
+                enabled=True,
+            )
+
+        confirm_enabled = (selected_1 is not None and selected_2 is not None)
+
+        self.draw_primary_button(
+            self.modal_confirm_rect,
+            "Potwierdź",
+            enabled=confirm_enabled,
+            hovered=(self.hovered_button == "modal_confirm"),
+            pressed=(self.pressed_button == "modal_confirm"),
+        )
+
     def draw_play_cards_panel(self, state):
         rect = self.play_cards_panel_rect
         self.draw_panel(rect, "Karty do zagrania")
 
         human_player_id = 0
-        knight_count = self.count_dev_cards(state, human_player_id, "knight")
 
-        enabled = any(a.type == ActionType.PLAY_KNIGHT for a in state.legal_actions())
+        knight = self.count_dev_cards(state, human_player_id, "knight")
+        road = self.count_dev_cards(state, human_player_id, "road_building")
+        plenty = self.count_dev_cards(state, human_player_id, "year_of_plenty")
+        monopoly = self.count_dev_cards(state, human_player_id, "monopoly")
+        vp = self.count_dev_cards(state, human_player_id, "victory_point")
 
-        label = f"Rycerz x{knight_count}"
+        is_my_turn = state.current_player == human_player_id
+        legal = state.legal_actions()
 
-        self.draw_button(
-            self.play_knight_card_rect,
-            label,
-            enabled=enabled and knight_count > 0,
+        def has(type_):
+            return any(a.type == type_ for a in legal)
+
+        self.draw_button(self.play_knight_card_rect,
+            f"Rycerz x{knight}",
+            enabled=is_my_turn and has(ActionType.PLAY_KNIGHT) and knight > 0,
             hovered=(self.hovered_button == "play_knight"),
             pressed=(self.pressed_button == "play_knight"),
+        )
+
+        self.draw_button(self.play_road_building_rect,
+            f"Budowa dróg x{road}",
+            enabled=is_my_turn and has(ActionType.PLAY_ROAD_BUILDING) and road > 0,
+            hovered=(self.hovered_button == "play_road_building"),
+            pressed=(self.pressed_button == "play_road_building"),
+        )
+
+        self.draw_button(self.play_year_of_plenty_rect,
+            f"Wynalazek x{plenty}",
+            enabled=is_my_turn and has(ActionType.PLAY_YEAR_OF_PLENTY) and plenty > 0,
+            hovered=(self.hovered_button == "play_year_of_plenty"),
+            pressed=(self.pressed_button == "play_year_of_plenty"),
+        )
+
+        self.draw_button(self.play_monopoly_rect,
+            f"Monopol x{monopoly}",
+            enabled=is_my_turn and has(ActionType.PLAY_MONOPOLY) and monopoly > 0,
+            hovered=(self.hovered_button == "play_monopoly"),
+            pressed=(self.pressed_button == "play_monopoly"),
+        )
+
+        self.draw_button(self.vp_card_rect,
+            f"PZ x{vp}",
+            enabled=False,
+            hovered=False,
+            pressed=False,
         )
 
     def draw_port_badge(self, center, port_type):
@@ -572,6 +1271,14 @@ class PygameView:
 
             self.draw_port_badge((bx, by), port_type)
 
+    def draw_info_button(self):
+        pygame.draw.rect(self.screen, BUTTON_BG, self.info_button_rect, border_radius=10)
+        pygame.draw.rect(self.screen, BUTTON_BORDER, self.info_button_rect, 2, border_radius=10)
+
+        txt = self.font_medium.render("i", True, TEXT_COLOR)
+        rect = txt.get_rect(center=self.info_button_rect.center)
+        self.screen.blit(txt, rect)
+
     def draw_trade_panel(self, state):
         rect = pygame.Rect(1030, 820, 330, 220)
         self.draw_panel(rect, "Handel z bankiem")
@@ -581,11 +1288,11 @@ class PygameView:
             ratio_txt = self.font_small.render(f"Aktualny kurs: {ratio}:1", True, TEXT_COLOR)
             self.screen.blit(ratio_txt, (rect.x + 14, rect.y + 28))
 
-        give_label = self.font_small.render("Oddaj 4:", True, TEXT_COLOR)
-        self.screen.blit(give_label, (rect.x + 14, rect.y + 46))
+        give_label = self.font_small.render("Oddaj :", True, TEXT_COLOR)
+        self.screen.blit(give_label, (rect.x + 14, rect.y + 55))
 
-        take_label = self.font_small.render("Otrzymaj 1:", True, TEXT_COLOR)
-        self.screen.blit(take_label, (rect.x + 14, rect.y + 111))
+        take_label = self.font_small.render("  Weź :", True, TEXT_COLOR)
+        self.screen.blit(take_label, (rect.x + 14, rect.y + 110))
 
         current_player = state.players[state.current_player]
 
@@ -926,8 +1633,8 @@ class PygameView:
         x = x0
         row2 = [
             ("knight", ai_player.played_knights),
-            ("nwr", 0),   # placeholder
-            ("ndh", 0),   # placeholder
+            ("nwr", 1 if state.largest_army_owner == 1 else 0),
+            ("ndh", state.longest_road_length if state.longest_road_owner == 1 else 0),
         ]
         for item, amount in row2:
             self.draw_icon_with_count(item, x, y_icons_2, amount)
@@ -966,9 +1673,10 @@ class PygameView:
         x = x0
         row2 = [
             ("knight", human_player.played_knights),
-            ("nwr", 0),   # placeholder
-            ("ndh", 0),   # placeholder
+            ("nwr", 1 if state.largest_army_owner == 0 else 0),
+            ("ndh", state.longest_road_length if state.longest_road_owner == 0 else 0),
         ]
+        
         for item, amount in row2:
             self.draw_icon_with_count(item, x, y_icons_2, amount)
             x += 72
@@ -1035,6 +1743,18 @@ class PygameView:
                 # właściwa linia
                 pygame.draw.line(self.screen, HIGHLIGHT_EDGE, pa, pb, 4)
 
+    def draw_action_log(self, state):
+        rect = pygame.Rect(30, 690, 250, 200)
+        self.draw_panel(rect, "Historia akcji")
+
+        log_lines = state.action_log[-7:]  # ostatnie 7 wpisów
+
+        y = rect.y + 40
+        for line in log_lines:
+            txt = self.font_small.render(line, True, TEXT_COLOR)
+            self.screen.blit(txt, (rect.x + 10, y))
+            y += 22
+
     def draw_game_over(self, state):
         if not state.is_terminal():
             return
@@ -1072,8 +1792,11 @@ class PygameView:
         self.draw_trade_panel(state)
         self.draw_inventory_bar(state)
         self.draw_ports(state)
+        self.draw_info_button()
+        self.draw_action_log(state)
 
         self.draw_game_over(state)
+        self.draw_modal()
         pygame.display.flip()
 
     def tick(self, fps=60):

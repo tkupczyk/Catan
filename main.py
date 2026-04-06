@@ -3,11 +3,36 @@ import pygame
 
 from core import board
 from core.board import create_full_board, HexResource
-from core.state import GameState, PlayerState
+from core.state import GameState, PlayerState, DevelopmentCard
 from core.actions import Action, ActionType
 from ui.pygame_view import PygameView
 from ai.mcts import mcts_search
 
+# =========================
+# DEBUG FLAGS
+# =========================
+DEBUG_START_RESOURCES = False
+DEBUG_START_DEV_CARDS_HUMAN = False
+DEBUG_START_DEV_CARDS_AI = False
+
+DEBUG_RESOURCE_AMOUNT = 999
+
+# Jakie karty dać graczowi 0 na start
+DEBUG_HUMAN_DEV_CARDS = [
+    DevelopmentCard.KNIGHT,
+    DevelopmentCard.KNIGHT,
+    DevelopmentCard.KNIGHT,
+    DevelopmentCard.ROAD_BUILDING,
+    DevelopmentCard.YEAR_OF_PLENTY,
+    DevelopmentCard.MONOPOLY,
+    DevelopmentCard.VICTORY_POINT,
+]
+
+# Jakie karty dać AI na start
+DEBUG_AI_DEV_CARDS = [
+    DevelopmentCard.KNIGHT,
+    DevelopmentCard.ROAD_BUILDING,
+]
 
 DICE_WEIGHT = {
     None: 0,
@@ -74,7 +99,6 @@ def score_setup_vertex(state, vertex):
 def choose_best_setup_settlement(state):
     actions = state.legal_actions()
     settlement_actions = [a for a in actions if a.type == ActionType.BUILD_SETTLEMENT]
-
     return max(settlement_actions, key=lambda a: score_setup_vertex(state, a.target))
 
 
@@ -123,6 +147,22 @@ def run_auto_setup(state):
     return state
 
 
+def apply_debug_resources(state):
+    for player in state.players:
+        player.resources[HexResource.BRICK] = DEBUG_RESOURCE_AMOUNT
+        player.resources[HexResource.LUMBER] = DEBUG_RESOURCE_AMOUNT
+        player.resources[HexResource.WOOL] = DEBUG_RESOURCE_AMOUNT
+        player.resources[HexResource.GRAIN] = DEBUG_RESOURCE_AMOUNT
+        player.resources[HexResource.ORE] = DEBUG_RESOURCE_AMOUNT
+
+
+def apply_debug_dev_cards(state):
+    if DEBUG_START_DEV_CARDS_HUMAN:
+        state.players[0].development_cards.extend(DEBUG_HUMAN_DEV_CARDS)
+
+    if DEBUG_START_DEV_CARDS_AI:
+        state.players[1].development_cards.extend(DEBUG_AI_DEV_CARDS)
+
 
 def main():
     HUMAN_PLAYER = 0
@@ -150,18 +190,45 @@ def main():
     state.dice_rolled = False
     state.last_roll = None
 
+    # =========================
+    # DEBUG START CONDITIONS
+    # =========================
+    if DEBUG_START_RESOURCES:
+        apply_debug_resources(state)
+
+    if DEBUG_START_DEV_CARDS_HUMAN or DEBUG_START_DEV_CARDS_AI:
+        apply_debug_dev_cards(state)
+
     print("After setup:")
     print("Current player:", state.current_player)
     print("Phase:", state.phase)
     print("Dice rolled:", state.dice_rolled)
     print("Legal actions:", state.legal_actions())
 
+    if DEBUG_START_RESOURCES:
+        print("\n[DEBUG] Start resources enabled")
+        for pid, player in enumerate(state.players):
+            print(
+                f"P{pid} resources:",
+                {
+                    "brick": player.resources[HexResource.BRICK],
+                    "lumber": player.resources[HexResource.LUMBER],
+                    "wool": player.resources[HexResource.WOOL],
+                    "grain": player.resources[HexResource.GRAIN],
+                    "ore": player.resources[HexResource.ORE],
+                }
+            )
+
+    if DEBUG_START_DEV_CARDS_HUMAN or DEBUG_START_DEV_CARDS_AI:
+        print("\n[DEBUG] Start development cards enabled")
+        for pid, player in enumerate(state.players):
+            print(f"P{pid} dev cards:", [card.value for card in player.development_cards])
+
     view = PygameView()
     running = True
 
     ai_thinking = False
     mouse_pressed_on_ui = False
-
 
     while running:
         for event in pygame.event.get():
@@ -181,6 +248,46 @@ def main():
                     mouse_pressed_on_ui = view.begin_ui_press(event.pos)
 
                 if event.type == pygame.MOUSEBUTTONUP:
+                    # 1. najpierw modal
+                    if view.active_modal is not None:
+                        modal_result = view.handle_modal_click(event.pos)
+
+                        if isinstance(modal_result, dict):
+                            if (
+                                modal_result["type"] == "confirmed_two_resources"
+                                and view.pending_card_action == "year_of_plenty"
+                            ):
+                                state = state.apply(
+                                    Action(
+                                        ActionType.PLAY_YEAR_OF_PLENTY,
+                                        chosen_resources=tuple(modal_result["resources"]),
+                                    )
+                                )
+
+                            elif (
+                                modal_result["type"] == "confirmed_one_resource"
+                                and view.pending_card_action == "monopoly"
+                            ):
+                                state = state.apply(
+                                    Action(
+                                        ActionType.PLAY_MONOPOLY,
+                                        resource_get=modal_result["resource"],
+                                    )
+                                )
+
+                            view.pending_card_action = None
+                            view.close_modal()
+
+                        elif modal_result == "closed":
+                            view.pending_card_action = None
+
+                        elif modal_result == "updated":
+                            pass
+
+                        mouse_pressed_on_ui = False
+                        continue
+
+                    # 2. zwykłe UI
                     new_state = view.end_ui_press(state, event.pos)
 
                     if new_state is not None:

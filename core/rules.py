@@ -138,23 +138,35 @@ def can_build_road(state, edge_id: int) -> bool:
     a, b = state.board.edges[edge_id]
     player = state.players[state.current_player]
 
+    # setup
     if state.phase in ("SETUP_ROAD_1", "SETUP_ROAD_2"):
         if state.last_setup_settlement is None:
             return False
         return a == state.last_setup_settlement or b == state.last_setup_settlement
 
-    if state.phase != "MAIN":
+    # tylko te fazy pozwalają budować drogi poza setupem
+    if state.phase not in ("MAIN", "ROAD_BUILDING"):
         return False
 
-    if not state.dice_rolled:
-        return False
+    # w MAIN trzeba mieć rzut i zasoby
+    if state.phase == "MAIN":
+        if not state.dice_rolled:
+            return False
+        if not has_resources(player, ROAD_COST):
+            return False
 
-    if not has_resources(player, ROAD_COST):
-        return False
+    # w ROAD_BUILDING nie wymagamy rzutu ani zasobów
 
-    if a in player.settlements or b in player.settlements or a in player.cities or b in player.cities:
+    # połączenie z własną osadą/miastem
+    if (
+        a in player.settlements
+        or b in player.settlements
+        or a in player.cities
+        or b in player.cities
+    ):
         return True
 
+    # albo połączenie z istniejącą drogą gracza
     for vertex in (a, b):
         for other_edge in state.board.vertex_edges[vertex]:
             if other_edge in player.roads:

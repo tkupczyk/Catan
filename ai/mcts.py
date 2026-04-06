@@ -56,6 +56,8 @@ def action_priority(action: Action) -> int:
         return 160
     if action.type == ActionType.BUILD_SETTLEMENT:
         return 145
+    if action.type == ActionType.PLAY_ROAD_BUILDING:
+        return 110
     if action.type == ActionType.PLAY_KNIGHT:
         return 95
     if action.type == ActionType.TRADE_BANK:
