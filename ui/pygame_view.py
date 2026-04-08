@@ -73,6 +73,7 @@ class PygameView:
         self.play_year_of_plenty_rect = pygame.Rect(850, 925, 132, 32)
         self.play_monopoly_rect = pygame.Rect(850, 960, 132, 32)
         self.vp_card_rect = pygame.Rect(850, 995, 132, 32)
+        self.restart_button_rect = pygame.Rect(self.width // 2 - 90, 110, 180, 44)
 
         self.roll_button_rect = pygame.Rect(1030, 705, 140, 42)
         self.end_turn_button_rect = pygame.Rect(1190, 705, 140, 42)
@@ -130,6 +131,12 @@ class PygameView:
         modal_button_w = 48
         modal_button_h = 48
         modal_gap = 14
+
+        self.menu_buttons = {
+            "start_human": pygame.Rect(self.width // 2 - 120, 260, 240, 50),
+            "start_ai": pygame.Rect(self.width // 2 - 120, 330, 240, 50),
+            "quit": pygame.Rect(self.width // 2 - 120, 400, 240, 50),
+        }
 
         for i, resource in enumerate(TRADE_RESOURCES):
             x = modal_start_x + i * (modal_button_w + modal_gap)
@@ -271,6 +278,8 @@ class PygameView:
             if self.current_modal_close_rect().collidepoint(mouse_pos):
                 return "modal_close"
             return None
+        if self.restart_button_rect.collidepoint(mouse_pos):
+            return "restart"
         if self.info_button_rect.collidepoint(mouse_pos):
             return "info"        
         if self.roll_button_rect.collidepoint(mouse_pos):
@@ -289,6 +298,9 @@ class PygameView:
             return "play_year_of_plenty"
         if self.play_monopoly_rect.collidepoint(mouse_pos):
             return "play_monopoly"
+        for name, rect in self.menu_buttons.items():
+            if rect.collidepoint(mouse_pos):
+                return name
         return None
 
     def legal_targets(self, state, action_type):
@@ -307,8 +319,20 @@ class PygameView:
         pressed = self.pressed_button
         self.pressed_button = None
 
+        if pressed == "start_human":
+            return "START_HUMAN"
+
+        if pressed == "start_ai":
+            return "START_AI"
+
+        if pressed == "quit":
+            return "QUIT"
+
         if pressed is None or released_on != pressed:
             return None
+
+        if pressed == "restart":
+            return "RESTART"
 
         if pressed == "info":
             self.help_tab = "ui"
@@ -1755,6 +1779,41 @@ class PygameView:
             self.screen.blit(txt, (rect.x + 10, y))
             y += 22
 
+    def draw_menu(self):
+        self.screen.fill(BACKGROUND)
+
+        title = self.font_large.render("CATAN", True, TEXT_COLOR)
+        self.screen.blit(title, title.get_rect(center=(self.width // 2, 150)))
+
+        subtitle = self.font_small.render("Wersja Python + AI", True, TEXT_COLOR)
+        self.screen.blit(subtitle, subtitle.get_rect(center=(self.width // 2, 190)))
+
+        self.draw_button(
+            self.menu_buttons["start_human"],
+            "Gracz vs AI",
+            True,
+            self.hovered_button == "start_human",
+            self.pressed_button == "start_human",
+        )
+
+        self.draw_button(
+            self.menu_buttons["start_ai"],
+            "AI vs AI",
+            True,
+            self.hovered_button == "start_ai",
+            self.pressed_button == "start_ai",
+        )
+
+        self.draw_button(
+            self.menu_buttons["quit"],
+            "Wyjście",
+            True,
+            self.hovered_button == "quit",
+            self.pressed_button == "quit",
+        )
+
+        pygame.display.flip()
+
     def draw_game_over(self, state):
         if not state.is_terminal():
             return
@@ -1763,19 +1822,35 @@ class PygameView:
         p1 = state.victory_points(1)
 
         if p0 > p1:
-            text = "Koniec gry - Player 0 wins"
+            text = "Koniec gry - Gracz 0 wygrywa"
         elif p1 > p0:
-            text = "Koniec gry - Player 1 wins"
+            text = "Koniec gry - Gracz 1 wygrywa"
         else:
-            text = "Koniec gry - Draw"
+            text = "Koniec gry - Remis"
 
         overlay = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 90))
+        overlay.fill((0, 0, 0, 110))
         self.screen.blit(overlay, (0, 0))
 
-        label = self.font_large.render(text, True, (255, 255, 255))
-        rect = label.get_rect(center=(self.width // 2, 60))
+        panel_rect = pygame.Rect(self.width // 2 - 230, 40, 460, 140)
+        pygame.draw.rect(self.screen, PANEL_BG, panel_rect, border_radius=16)
+        pygame.draw.rect(self.screen, PANEL_BORDER, panel_rect, 3, border_radius=16)
+
+        label = self.font_large.render(text, True, TEXT_COLOR)
+        rect = label.get_rect(center=(self.width // 2, 80))
         self.screen.blit(label, rect)
+
+        score_text = self.font_medium.render(f"PZ: {p0} - {p1}", True, TEXT_COLOR)
+        score_rect = score_text.get_rect(center=(self.width // 2, 120))
+        self.screen.blit(score_text, score_rect)
+
+        self.draw_button(
+            self.restart_button_rect,
+            "Nowa gra",
+            enabled=True,
+            hovered=(self.hovered_button == "restart"),
+            pressed=(self.pressed_button == "restart"),
+        )
 
     def draw(self, state):
         self.screen.fill(BACKGROUND)

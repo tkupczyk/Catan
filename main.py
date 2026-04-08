@@ -1,7 +1,5 @@
-import random
 import pygame
 
-from core import board
 from core.board import create_full_board, HexResource
 from core.state import GameState, PlayerState, DevelopmentCard
 from core.actions import Action, ActionType
@@ -17,7 +15,6 @@ DEBUG_START_DEV_CARDS_AI = False
 
 DEBUG_RESOURCE_AMOUNT = 999
 
-# Jakie karty dać graczowi 0 na start
 DEBUG_HUMAN_DEV_CARDS = [
     DevelopmentCard.KNIGHT,
     DevelopmentCard.KNIGHT,
@@ -28,7 +25,6 @@ DEBUG_HUMAN_DEV_CARDS = [
     DevelopmentCard.VICTORY_POINT,
 ]
 
-# Jakie karty dać AI na start
 DEBUG_AI_DEV_CARDS = [
     DevelopmentCard.KNIGHT,
     DevelopmentCard.ROAD_BUILDING,
@@ -67,15 +63,15 @@ def vertex_hexes(board, vertex):
 
 
 def score_setup_vertex(state, vertex):
-    board = state.board
-    touching_hexes = vertex_hexes(board, vertex)
+    game_board = state.board
+    touching_hexes = vertex_hexes(game_board, vertex)
 
     score = 0.0
     distinct_resources = set()
 
     for hex_id in touching_hexes:
-        resource = board.hex_resources[hex_id]
-        number = board.hex_numbers[hex_id]
+        resource = game_board.hex_resources[hex_id]
+        number = game_board.hex_numbers[hex_id]
 
         score += DICE_WEIGHT[number]
         score += RESOURCE_WEIGHT[resource]
@@ -164,20 +160,17 @@ def apply_debug_dev_cards(state):
         state.players[1].development_cards.extend(DEBUG_AI_DEV_CARDS)
 
 
-def main():
-    HUMAN_PLAYER = 0
-    AI_PLAYER = 1
-
-    board = create_full_board(randomize=True)
-    desert_hex = next(i for i, r in enumerate(board.hex_resources) if r == HexResource.DESERT)
+def create_new_game(human_player=0):
+    game_board = create_full_board(randomize=True)
+    desert_hex = next(i for i, r in enumerate(game_board.hex_resources) if r == HexResource.DESERT)
 
     print("\n=== DEBUG: 6/8 positions ===")
-    for i, num in enumerate(board.hex_numbers):
+    for i, num in enumerate(game_board.hex_numbers):
         if num in (6, 8):
             print(f"Hex {i}: {num}")
 
     state = GameState(
-        board=board,
+        board=game_board,
         players=[PlayerState(), PlayerState()],
         robber_hex=desert_hex,
         development_deck=GameState.default_development_deck(),
@@ -185,14 +178,11 @@ def main():
 
     state = run_auto_setup(state)
 
-    state.current_player = HUMAN_PLAYER
+    state.current_player = 0 if human_player is None else human_player
     state.phase = "MAIN"
     state.dice_rolled = False
     state.last_roll = None
 
-    # =========================
-    # DEBUG START CONDITIONS
-    # =========================
     if DEBUG_START_RESOURCES:
         apply_debug_resources(state)
 
@@ -224,6 +214,14 @@ def main():
         for pid, player in enumerate(state.players):
             print(f"P{pid} dev cards:", [card.value for card in player.development_cards])
 
+    return state
+
+
+def main():
+    HUMAN_PLAYER = 0
+    mode = "menu"   # "menu" albo "game"
+    state = None
+
     view = PygameView()
     running = True
 
@@ -236,88 +234,161 @@ def main():
                 running = False
                 continue
 
-            if state.is_terminal():
-                continue
-
-            # ruchy człowieka tylko w jego turze
-            if state.current_player == HUMAN_PLAYER:
+            if mode == "menu":
                 if event.type == pygame.MOUSEMOTION:
                     view.update_hover(event.pos)
 
                 if event.type == pygame.MOUSEBUTTONDOWN:
-                    mouse_pressed_on_ui = view.begin_ui_press(event.pos)
+                    view.begin_ui_press(event.pos)
 
                 if event.type == pygame.MOUSEBUTTONUP:
-                    # 1. najpierw modal
-                    if view.active_modal is not None:
-                        modal_result = view.handle_modal_click(event.pos)
+                    menu_action = view.end_ui_press(None, event.pos)
 
-                        if isinstance(modal_result, dict):
-                            if (
-                                modal_result["type"] == "confirmed_two_resources"
-                                and view.pending_card_action == "year_of_plenty"
-                            ):
-                                state = state.apply(
-                                    Action(
-                                        ActionType.PLAY_YEAR_OF_PLENTY,
-                                        chosen_resources=tuple(modal_result["resources"]),
+                    if menu_action == "START_HUMAN":
+                        HUMAN_PLAYER = 0
+                        state = create_new_game(human_player=0)
+                        mode = "game"
+                        ai_thinking = False
+                        mouse_pressed_on_ui = False
+                        view.close_modal()
+                        view.pending_card_action = None
+                        view.pressed_button = None
+
+                    elif menu_action == "START_AI":
+                        HUMAN_PLAYER = None
+                        state = create_new_game(human_player=None)
+                        mode = "game"
+                        ai_thinking = False
+                        mouse_pressed_on_ui = False
+                        view.close_modal()
+                        view.pending_card_action = None
+                        view.pressed_button = None
+
+                    elif menu_action == "QUIT":
+                        running = False
+
+            elif mode == "game":
+                human_turn = (HUMAN_PLAYER is not None and state.current_player == HUMAN_PLAYER)
+
+                if human_turn:
+                    if event.type == pygame.MOUSEMOTION:
+                        view.update_hover(event.pos)
+
+                    if event.type == pygame.MOUSEBUTTONDOWN:
+                        mouse_pressed_on_ui = view.begin_ui_press(event.pos)
+
+                    if event.type == pygame.MOUSEBUTTONUP:
+                        # 1. modal
+                        if view.active_modal is not None:
+                            modal_result = view.handle_modal_click(event.pos)
+
+                            if isinstance(modal_result, dict):
+                                if (
+                                    modal_result["type"] == "confirmed_two_resources"
+                                    and view.pending_card_action == "year_of_plenty"
+                                ):
+                                    state = state.apply(
+                                        Action(
+                                            ActionType.PLAY_YEAR_OF_PLENTY,
+                                            chosen_resources=tuple(modal_result["resources"]),
+                                        )
                                     )
-                                )
 
-                            elif (
-                                modal_result["type"] == "confirmed_one_resource"
-                                and view.pending_card_action == "monopoly"
-                            ):
-                                state = state.apply(
-                                    Action(
-                                        ActionType.PLAY_MONOPOLY,
-                                        resource_get=modal_result["resource"],
+                                elif (
+                                    modal_result["type"] == "confirmed_one_resource"
+                                    and view.pending_card_action == "monopoly"
+                                ):
+                                    state = state.apply(
+                                        Action(
+                                            ActionType.PLAY_MONOPOLY,
+                                            resource_get=modal_result["resource"],
+                                        )
                                     )
-                                )
 
-                            view.pending_card_action = None
-                            view.close_modal()
+                                view.pending_card_action = None
+                                view.close_modal()
 
-                        elif modal_result == "closed":
-                            view.pending_card_action = None
+                            elif modal_result == "closed":
+                                view.pending_card_action = None
 
-                        elif modal_result == "updated":
-                            pass
+                            mouse_pressed_on_ui = False
+                            continue
+
+                        # 2. zwykłe UI
+                        new_state = view.end_ui_press(state, event.pos)
+
+                        if new_state is not None:
+                            if new_state == "RESTART":
+                                if HUMAN_PLAYER is None:
+                                    state = create_new_game(human_player=None)
+                                else:
+                                    state = create_new_game(human_player=HUMAN_PLAYER)
+
+                                view.close_modal()
+                                view.pending_card_action = None
+                                view.pressed_button = None
+                                ai_thinking = False
+                                mouse_pressed_on_ui = False
+                            else:
+                                state = new_state
+                        else:
+                            trade_state = view.handle_trade_selection_click(state, event.pos)
+                            if trade_state is not None:
+                                state = trade_state
+                            elif not mouse_pressed_on_ui:
+                                state = view.handle_click(state, event.pos)
 
                         mouse_pressed_on_ui = False
-                        continue
 
-                    # 2. zwykłe UI
-                    new_state = view.end_ui_press(state, event.pos)
+                else:
+                    # pozwól kliknąć restart/help także gdy gra AI
+                    if event.type == pygame.MOUSEMOTION:
+                        view.update_hover(event.pos)
 
-                    if new_state is not None:
-                        state = new_state
-                    else:
-                        trade_state = view.handle_trade_selection_click(state, event.pos)
-                        if trade_state is not None:
-                            state = trade_state
-                        elif not mouse_pressed_on_ui:
-                            state = view.handle_click(state, event.pos)
+                    if event.type == pygame.MOUSEBUTTONDOWN:
+                        mouse_pressed_on_ui = view.begin_ui_press(event.pos)
 
-                    mouse_pressed_on_ui = False
+                    if event.type == pygame.MOUSEBUTTONUP:
+                        new_state = view.end_ui_press(state, event.pos)
 
-        # ruch AI
-        if state.current_player == AI_PLAYER and not ai_thinking:
-            ai_thinking = True
+                        if new_state == "RESTART":
+                            if HUMAN_PLAYER is None:
+                                state = create_new_game(human_player=None)
+                            else:
+                                state = create_new_game(human_player=HUMAN_PLAYER)
 
-            if not state.is_terminal():
+                            view.close_modal()
+                            view.pending_card_action = None
+                            view.pressed_button = None
+                            ai_thinking = False
+                            mouse_pressed_on_ui = False
+
+                        mouse_pressed_on_ui = False
+
+        # ruch AI - poza pętlą eventów
+        if mode == "game" and state is not None:
+            ai_turn = (HUMAN_PLAYER is None or state.current_player != HUMAN_PLAYER)
+
+            if not state.is_terminal() and ai_turn and not ai_thinking:
+                ai_thinking = True
+
                 actions = state.legal_actions()
                 if actions:
                     action = mcts_search(
                         state,
-                        player_id=AI_PLAYER,
+                        player_id=state.current_player,
                         iterations=250,
                     )
                     state = state.apply(action)
 
-            ai_thinking = False
+                ai_thinking = False
 
-        view.draw(state)
+        # rysowanie - poza pętlą eventów
+        if mode == "menu":
+            view.draw_menu()
+        else:
+            view.draw(state)
+
         view.tick(30)
 
     view.quit()
