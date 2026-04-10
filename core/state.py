@@ -37,6 +37,7 @@ class GameState:
     players: List[PlayerState]
     current_player: int = 0
 
+
     action_log: List[str] = field(default_factory=list)
     development_deck: List[DevelopmentCard] = field(default_factory=list)
     largest_army_owner: int | None = None
@@ -54,6 +55,10 @@ class GameState:
     last_roll: int | None = None
 
     robber_hex: int = 0
+    dev_card_played_this_turn: bool = False
+
+    steal_targets: list[int] = field(default_factory=list)
+    pending_robber_hex: int | None = None
 
     def clone(self) -> "GameState":
         return GameState(
@@ -84,6 +89,9 @@ class GameState:
             dice_rolled=self.dice_rolled,
             last_roll=self.last_roll,
             robber_hex=self.robber_hex,
+            dev_card_played_this_turn=self.dev_card_played_this_turn,
+            steal_targets=list(self.steal_targets),
+            pending_robber_hex=self.pending_robber_hex,
         )
     
     def log(self, text: str) -> None:
@@ -92,6 +100,24 @@ class GameState:
         # trzymaj tylko ostatnie 30 wpisów
         if len(self.action_log) > 30:
             self.action_log = self.action_log[-30:]
+
+    def _steal_random_resource_from(self, victim_id: int):
+        import random
+
+        victim = self.players[victim_id]
+        current = self.players[self.current_player]
+
+        available = []
+        for resource, amount in victim.resources.items():
+            available.extend([resource] * amount)
+
+        if not available:
+            return
+
+        stolen = random.choice(available)
+        victim.resources[stolen] -= 1
+        current.resources[stolen] += 1
+        self.log(f"Gracz {self.current_player} ukradł 1 surowiec od gracza {victim_id}")
 
     @staticmethod
     def default_development_deck() -> List[DevelopmentCard]:
@@ -249,6 +275,12 @@ class GameState:
                     actions.append(Action(ActionType.MOVE_ROBBER, hex_id))
             return actions
 
+        if self.phase == "STEAL_PLAYER":
+            return [
+                Action(ActionType.STEAL_FROM_PLAYER, target=pid)
+                for pid in self.steal_targets
+            ]
+
         # główna faza: najpierw rzut
         if self.phase == "MAIN" and not self.dice_rolled:
             return [Action(ActionType.ROLL_DICE)]
@@ -271,17 +303,18 @@ class GameState:
         if rules.can_buy_development_card(self):
             actions.append(Action(ActionType.BUY_DEVELOPMENT_CARD))
 
-        if DevelopmentCard.KNIGHT in player.development_cards:
-            actions.append(Action(ActionType.PLAY_KNIGHT))
+        if not self.dev_card_played_this_turn:
+            if DevelopmentCard.KNIGHT in player.development_cards:
+                actions.append(Action(ActionType.PLAY_KNIGHT))
 
-        if DevelopmentCard.ROAD_BUILDING in player.development_cards:
-            actions.append(Action(ActionType.PLAY_ROAD_BUILDING))
+            if DevelopmentCard.ROAD_BUILDING in player.development_cards:
+                actions.append(Action(ActionType.PLAY_ROAD_BUILDING))
 
-        if DevelopmentCard.YEAR_OF_PLENTY in player.development_cards:
-            actions.append(Action(ActionType.PLAY_YEAR_OF_PLENTY))
+            if DevelopmentCard.YEAR_OF_PLENTY in player.development_cards:
+                actions.append(Action(ActionType.PLAY_YEAR_OF_PLENTY))
 
-        if DevelopmentCard.MONOPOLY in player.development_cards:
-            actions.append(Action(ActionType.PLAY_MONOPOLY))
+            if DevelopmentCard.MONOPOLY in player.development_cards:
+                actions.append(Action(ActionType.PLAY_MONOPOLY))
 
         trade_resources = [
             HexResource.BRICK,
@@ -316,18 +349,22 @@ class GameState:
     def _advance_setup_turn(self) -> None:
         num_players = len(self.players)
 
+        # pierwszy przebieg (do przodu)
         if self.phase == "SETUP_ROAD_1":
             if self.current_player < num_players - 1:
                 self.current_player += 1
                 self.phase = "SETUP_SETTLEMENT_1"
             else:
+                # ostatni gracz -> zaczyna drugi przebieg
                 self.phase = "SETUP_SETTLEMENT_2"
 
+        # drugi przebieg (do tyłu)
         elif self.phase == "SETUP_ROAD_2":
             if self.current_player > 0:
                 self.current_player -= 1
                 self.phase = "SETUP_SETTLEMENT_2"
             else:
+                # koniec setupu
                 self.phase = "MAIN"
                 self.dice_rolled = False
                 self.last_roll = None
@@ -357,6 +394,7 @@ class GameState:
                 self.update_largest_army()
                 self.phase = "ROBBER_FROM_KNIGHT"
                 self.log(f"Gracz {self.current_player}: zagrał Rycerza")
+                self.dev_card_played_this_turn = True
             return
 
         if action.type == ActionType.PLAY_ROAD_BUILDING and self.phase == "MAIN":
@@ -365,6 +403,7 @@ class GameState:
                 self.phase = "ROAD_BUILDING"
                 self.free_roads_to_build = 2
                 self.log(f"Gracz {self.current_player}: zagrał kartę Budowa Dróg")
+                self.dev_card_played_this_turn = True
             return
 
         if action.type == ActionType.PLAY_YEAR_OF_PLENTY and self.phase == "MAIN":
@@ -378,6 +417,7 @@ class GameState:
 
                     for resource in chosen:
                         player.resources[resource] += 1
+            self.dev_card_played_this_turn = True
             return
 
         if action.type == ActionType.PLAY_MONOPOLY and self.phase == "MAIN":
@@ -397,26 +437,44 @@ class GameState:
                             total_taken += amount
 
                     player.resources[resource] += total_taken
+                self.dev_card_played_this_turn = True
             return
 
         # przesunięcie złodzieja
         if action.type == ActionType.MOVE_ROBBER and self.phase in ("ROBBER", "ROBBER_FROM_KNIGHT"):
             hex_id = action.target
-            
-            if hex_id is not None and rules.can_move_robber(self, hex_id):
-                self.robber_hex = hex_id
-                self.log(f"Gracz {self.current_player}: przesunął złodzieja na heks {hex_id}")
+            self.robber_hex = hex_id
 
-                candidates = [
-                    pid for pid in self._players_touching_hex(hex_id)
-                    if pid != self.current_player
-                ]
+            victims = []
+            for pid in self._players_touching_hex(hex_id):
+                if pid == self.current_player:
+                    continue
+                if sum(self.players[pid].resources.values()) > 0:
+                    victims.append(pid)
 
-                if candidates:
-                    victim_id = candidates[0]
-                    self._steal_one_resource(victim_id)
-
+            if len(victims) == 0:
                 self.phase = "MAIN"
+                return
+
+            if len(victims) == 1:
+                self._steal_random_resource_from(victims[0])
+                self.phase = "MAIN"
+                return
+
+            self.steal_targets = victims
+            self.pending_robber_hex = hex_id
+            self.phase = "STEAL_PLAYER"
+            return
+
+        if action.type == ActionType.STEAL_FROM_PLAYER:
+            victim_id = action.target
+
+            if victim_id in self.steal_targets:
+                self._steal_random_resource_from(victim_id)
+
+            self.steal_targets = []
+            self.pending_robber_hex = None
+            self.phase = "MAIN"
             return
 
         # budowa osady
@@ -464,13 +522,6 @@ class GameState:
                     self._advance_setup_turn()
             return
         
-        if action.type == ActionType.PLAY_ROAD_BUILDING and self.phase == "MAIN":
-            if DevelopmentCard.ROAD_BUILDING in player.development_cards:
-                player.development_cards.remove(DevelopmentCard.ROAD_BUILDING)
-                self.phase = "ROAD_BUILDING"
-                self.free_roads_to_build = 2
-            return
-        
         # budowa miasta
         if action.type == ActionType.BUILD_CITY:
             v = action.target
@@ -510,9 +561,10 @@ class GameState:
             player.new_development_cards.clear()
             self.log(f"Gracz {ending_player}: zakończył turę")
 
-            self.current_player = 1 - self.current_player
+            self.current_player = (self.current_player + 1) % len(self.players)
             self.dice_rolled = False
             self.last_roll = None
+            self.dev_card_played_this_turn = False
             return
 
         if action.type == ActionType.PASS:
@@ -626,18 +678,18 @@ class GameState:
         return total
 
     def is_terminal(self) -> bool:
-        return any(self.victory_points(i) >= 10 for i in range(len(self.players)))
+        return any(self.victory_points(pid) >= 10 for pid in range(len(self.players)))
 
     def reward(self, player_id: int) -> float:
         my_vp = self.victory_points(player_id)
-        opp_vp = max(
-            self.victory_points(i)
-            for i in range(len(self.players))
-            if i != player_id
+        best_other = max(
+            self.victory_points(pid)
+            for pid in range(len(self.players))
+            if pid != player_id
         )
 
-        if my_vp >= 10 and my_vp > opp_vp:
+        if my_vp >= 10 and my_vp > best_other:
             return 1.0
-        if opp_vp >= 10 and opp_vp > my_vp:
+        if best_other >= 10 and best_other > my_vp:
             return 0.0
         return 0.5

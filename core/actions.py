@@ -11,6 +11,7 @@ class ActionType(Enum):
     PLAY_KNIGHT = auto()
     PLAY_ROAD_BUILDING = auto()
     PLAY_YEAR_OF_PLENTY = auto()
+    STEAL_FROM_PLAYER = auto()
     PLAY_MONOPOLY = auto()
     BUILD_ROAD = auto()
     BUILD_SETTLEMENT = auto()
@@ -25,3 +26,4 @@ class Action:
     resource_give: HexResource | None = None
     resource_get: HexResource | None = None
     chosen_resources: Tuple[HexResource, ...] = ()
+    

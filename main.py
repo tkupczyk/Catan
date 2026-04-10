@@ -153,14 +153,14 @@ def apply_debug_resources(state):
 
 
 def apply_debug_dev_cards(state):
-    if DEBUG_START_DEV_CARDS_HUMAN:
+    if DEBUG_START_DEV_CARDS_HUMAN and len(state.players) > 0:
         state.players[0].development_cards.extend(DEBUG_HUMAN_DEV_CARDS)
 
-    if DEBUG_START_DEV_CARDS_AI:
+    if DEBUG_START_DEV_CARDS_AI and len(state.players) > 1:
         state.players[1].development_cards.extend(DEBUG_AI_DEV_CARDS)
 
 
-def create_new_game(human_player=0):
+def create_new_game(human_player=0, num_players=3):
     game_board = create_full_board(randomize=True)
     desert_hex = next(i for i, r in enumerate(game_board.hex_resources) if r == HexResource.DESERT)
 
@@ -171,17 +171,11 @@ def create_new_game(human_player=0):
 
     state = GameState(
         board=game_board,
-        players=[PlayerState(), PlayerState()],
+        players=[PlayerState() for _ in range(num_players)],
         robber_hex=desert_hex,
         development_deck=GameState.default_development_deck(),
     )
 
-    state = run_auto_setup(state)
-
-    state.current_player = 0 if human_player is None else human_player
-    state.phase = "MAIN"
-    state.dice_rolled = False
-    state.last_roll = None
 
     if DEBUG_START_RESOURCES:
         apply_debug_resources(state)
@@ -246,8 +240,12 @@ def main():
 
                     if menu_action == "START_HUMAN":
                         HUMAN_PLAYER = 0
-                        state = create_new_game(human_player=0)
+                        state = create_new_game(
+                            human_player=0,
+                            num_players=view.menu_selected_players,
+                        )
                         mode = "game"
+                        view.in_menu = False
                         ai_thinking = False
                         mouse_pressed_on_ui = False
                         view.close_modal()
@@ -256,8 +254,12 @@ def main():
 
                     elif menu_action == "START_AI":
                         HUMAN_PLAYER = None
-                        state = create_new_game(human_player=None)
+                        state = create_new_game(
+                            human_player=None,
+                            num_players=view.menu_selected_players,
+                        )
                         mode = "game"
+                        view.in_menu = False
                         ai_thinking = False
                         mouse_pressed_on_ui = False
                         view.close_modal()
@@ -305,6 +307,14 @@ def main():
                                         )
                                     )
 
+                                elif modal_result["type"] == "confirmed_steal_target":
+                                    state = state.apply(
+                                        Action(
+                                            ActionType.STEAL_FROM_PLAYER,
+                                            target=modal_result["target_player"],
+                                        )
+                                    )
+
                                 view.pending_card_action = None
                                 view.close_modal()
 
@@ -320,13 +330,29 @@ def main():
                         if new_state is not None:
                             if new_state == "RESTART":
                                 if HUMAN_PLAYER is None:
-                                    state = create_new_game(human_player=None)
+                                    state = create_new_game(
+                                        human_player=None,
+                                        num_players=view.menu_selected_players,
+                                    )
                                 else:
-                                    state = create_new_game(human_player=HUMAN_PLAYER)
+                                    state = create_new_game(
+                                        human_player=HUMAN_PLAYER,
+                                        num_players=view.menu_selected_players,
+                                    )
 
                                 view.close_modal()
                                 view.pending_card_action = None
                                 view.pressed_button = None
+                                ai_thinking = False
+                                mouse_pressed_on_ui = False
+                            
+                            elif new_state == "MENU":
+                                mode = "menu"
+                                state = None
+                                view.in_menu = True
+                                view.pressed_button = None
+                                view.hovered_button = None
+                                view.close_modal()
                                 ai_thinking = False
                                 mouse_pressed_on_ui = False
                             else:
@@ -353,13 +379,29 @@ def main():
 
                         if new_state == "RESTART":
                             if HUMAN_PLAYER is None:
-                                state = create_new_game(human_player=None)
+                                state = create_new_game(
+                                    human_player=None,
+                                    num_players=view.menu_selected_players,
+                                )
                             else:
-                                state = create_new_game(human_player=HUMAN_PLAYER)
+                                state = create_new_game(
+                                    human_player=HUMAN_PLAYER,
+                                    num_players=view.menu_selected_players,
+                                )
 
                             view.close_modal()
                             view.pending_card_action = None
                             view.pressed_button = None
+                            ai_thinking = False
+                            mouse_pressed_on_ui = False
+
+                        elif new_state == "MENU":
+                            mode = "menu"
+                            state = None
+                            view.in_menu = True
+                            view.pressed_button = None
+                            view.hovered_button = None
+                            view.close_modal()
                             ai_thinking = False
                             mouse_pressed_on_ui = False
 
@@ -382,6 +424,24 @@ def main():
                     state = state.apply(action)
 
                 ai_thinking = False
+
+        if (
+            mode == "game"
+            and state is not None
+            and state.phase == "STEAL_PLAYER"
+            and state.current_player == 0
+            and view.active_modal is None
+            and not view.steal_modal_opened_for_phase
+        ):
+            view.open_modal(
+                "choose_steal_target",
+                steal_targets=list(state.steal_targets),
+                selected_target=None,
+            )
+            view.steal_modal_opened_for_phase = True
+
+        if state is not None and state.phase != "STEAL_PLAYER":
+            view.steal_modal_opened_for_phase = False
 
         # rysowanie - poza pętlą eventów
         if mode == "menu":

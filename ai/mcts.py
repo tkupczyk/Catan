@@ -61,7 +61,7 @@ def action_priority(action: Action) -> int:
     if action.type == ActionType.PLAY_KNIGHT:
         return 95
     if action.type == ActionType.TRADE_BANK:
-        return 85
+        return 35
     if action.type == ActionType.BUY_DEVELOPMENT_CARD:
         return 70
     if action.type == ActionType.BUILD_ROAD:
@@ -198,7 +198,8 @@ def tactical_priority_action(state, player_id: int) -> Action | None:
     Twarda polityka:
     - jeśli można zbudować miasto, zrób to
     - jeśli można zbudować osadę, zrób to
-    - jeśli można zrobić dobry trade pod miasto/osadę, rozważ to
+    - jeśli można zagrać silną kartę rozwoju, rozważ to
+    - trade tylko wtedy, gdy naprawdę pomaga i nie ma lepszej akcji budowy
     """
     actions = state.legal_actions()
 
@@ -210,11 +211,26 @@ def tactical_priority_action(state, player_id: int) -> Action | None:
     if settlement_actions:
         return max(settlement_actions, key=lambda a: immediate_action_score(state, a, player_id))
 
-    # Trade preferujemy tylko gdy nie ma już bezpośredniego VP move
+    road_building_actions = [a for a in actions if a.type == ActionType.PLAY_ROAD_BUILDING]
+    if road_building_actions:
+        return road_building_actions[0]
+
+    knight_actions = [a for a in actions if a.type == ActionType.PLAY_KNIGHT]
+    if knight_actions:
+        return knight_actions[0]
+
+    buy_dev_actions = [a for a in actions if a.type == ActionType.BUY_DEVELOPMENT_CARD]
+    if buy_dev_actions:
+        return buy_dev_actions[0]
+
+    # Trade tylko jeśli nie ma budowy i trade jest naprawdę sensowny
     trade_actions = [a for a in actions if a.type == ActionType.TRADE_BANK]
     if trade_actions:
         best_trade = max(trade_actions, key=lambda a: immediate_action_score(state, a, player_id))
-        if immediate_action_score(state, best_trade, player_id) >= 130:
+        best_trade_score = immediate_action_score(state, best_trade, player_id)
+
+        # mocniej ograniczamy spam handlu
+        if best_trade_score >= 145:
             return best_trade
 
     return None
@@ -296,22 +312,21 @@ def robber_hex_score(state, hex_id: int, root_player_id: int) -> float:
         return -999.0
 
     score = 0.0
-    opp_id = 1 - root_player_id
-
     touched = players_touching_hex(state, hex_id)
     resource = state.board.hex_resources[hex_id]
     number = state.board.hex_numbers[hex_id]
 
     score += 2.0 * DICE_WEIGHT[number]
 
-    if opp_id in touched:
-        score += 8.0
-        opp = state.players[opp_id]
-        if sum(opp.resources.values()) > 0:
-            score += 5.0
-
-    if root_player_id in touched:
-        score -= 6.0
+    # premia za blokowanie przeciwników
+    for pid in touched:
+        if pid == root_player_id:
+            score -= 6.0
+        else:
+            score += 8.0
+            opp = state.players[pid]
+            if sum(opp.resources.values()) > 0:
+                score += 5.0
 
     if resource == HexResource.DESERT:
         score -= 3.0
@@ -368,50 +383,43 @@ def weighted_action_choice(actions: list[Action], state=None, root_player_id: in
 
 def evaluate_state(state, root_player_id: int) -> float:
     me = state.players[root_player_id]
-    opp_id = 1 - root_player_id
-    opp = state.players[opp_id]
-
     my_vp = state.victory_points(root_player_id)
-    opp_vp = state.victory_points(opp_id)
+
+    other_ids = [pid for pid in range(len(state.players)) if pid != root_player_id]
+    others = [state.players[pid] for pid in other_ids]
+
+    best_other_vp = max(state.victory_points(pid) for pid in other_ids) if other_ids else 0
+    best_other_resources = max(sum(p.resources.values()) for p in others) if others else 0
+    best_other_roads = max(len(p.roads) for p in others) if others else 0
+    best_other_settlements = max(len(p.settlements) for p in others) if others else 0
+    best_other_cities = max(len(p.cities) for p in others) if others else 0
+    best_other_prod = max(controlled_production_score(state, pid) for pid in other_ids) if other_ids else 0.0
+    best_other_open_spots = max(open_settlement_spots_score(state, pid) for pid in other_ids) if other_ids else 0.0
+    best_other_settlement_ready = max(settlement_progress_score(state.players[pid]) for pid in other_ids) if other_ids else 0.0
+    best_other_city_ready = max(city_progress_score(state.players[pid]) for pid in other_ids) if other_ids else 0.0
+    best_other_trade = max(trade_power_score(state.players[pid]) for pid in other_ids) if other_ids else 0.0
 
     my_resources = sum(me.resources.values())
-    opp_resources = sum(opp.resources.values())
-
     my_roads = len(me.roads)
-    opp_roads = len(opp.roads)
-
     my_settlements = len(me.settlements)
-    opp_settlements = len(opp.settlements)
-
     my_cities = len(me.cities)
-    opp_cities = len(opp.cities)
-
     my_prod = controlled_production_score(state, root_player_id)
-    opp_prod = controlled_production_score(state, opp_id)
-
     my_open_spots = open_settlement_spots_score(state, root_player_id)
-    opp_open_spots = open_settlement_spots_score(state, opp_id)
-
     my_settlement_ready = settlement_progress_score(me)
-    opp_settlement_ready = settlement_progress_score(opp)
-
     my_city_ready = city_progress_score(me)
-    opp_city_ready = city_progress_score(opp)
-
     my_trade = trade_power_score(me)
-    opp_trade = trade_power_score(opp)
 
     score = 0.0
-    score += 18.0 * (my_vp - opp_vp)
-    score += 4.5 * (my_cities - opp_cities)
-    score += 3.2 * (my_settlements - opp_settlements)
-    score += 0.04 * (my_roads - opp_roads)
-    score += 0.16 * (my_resources - opp_resources)
-    score += 0.55 * (my_prod - opp_prod)
-    score += 0.10 * (my_open_spots - opp_open_spots)
-    score += 0.95 * (my_settlement_ready - opp_settlement_ready)
-    score += 0.80 * (my_city_ready - opp_city_ready)
-    score += 0.22 * (my_trade - opp_trade)
+    score += 18.0 * (my_vp - best_other_vp)
+    score += 4.5 * (my_cities - best_other_cities)
+    score += 3.2 * (my_settlements - best_other_settlements)
+    score += 0.04 * (my_roads - best_other_roads)
+    score += 0.16 * (my_resources - best_other_resources)
+    score += 0.55 * (my_prod - best_other_prod)
+    score += 0.10 * (my_open_spots - best_other_open_spots)
+    score += 0.95 * (my_settlement_ready - best_other_settlement_ready)
+    score += 0.80 * (my_city_ready - best_other_city_ready)
+    score += 0.22 * (my_trade - best_other_trade)
 
     return 1.0 / (1.0 + math.exp(-score / 6.0))
 

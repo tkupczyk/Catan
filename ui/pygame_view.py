@@ -59,7 +59,7 @@ class PygameView:
         self.width = width
         self.height = height
         self.screen = pygame.display.set_mode((width, height))
-        pygame.display.set_caption("Catan - Debug View")
+        pygame.display.set_caption("Catan")
 
         self.info_button_rect = pygame.Rect(self.width - 60, 20, 40, 40)
 
@@ -73,11 +73,15 @@ class PygameView:
         self.play_year_of_plenty_rect = pygame.Rect(850, 925, 132, 32)
         self.play_monopoly_rect = pygame.Rect(850, 960, 132, 32)
         self.vp_card_rect = pygame.Rect(850, 995, 132, 32)
-        self.restart_button_rect = pygame.Rect(self.width // 2 - 90, 110, 180, 44)
-
+        self.restart_button_rect = pygame.Rect(self.width // 2 - 200, 140, 180, 44)
+        self.menu_button_rect = pygame.Rect(self.width // 2 + 20, 140, 180, 44)
         self.roll_button_rect = pygame.Rect(1030, 705, 140, 42)
         self.end_turn_button_rect = pygame.Rect(1190, 705, 140, 42)
         self.buy_dev_card_rect = pygame.Rect(1110, 752, 140, 42)
+        self.in_menu = True
+
+        self.steal_target_rects = {}
+        self.steal_modal_opened_for_phase = False
 
         self.resource_icons = self.load_resource_icons()
         self.ui_icons = self.load_ui_icons()
@@ -89,6 +93,20 @@ class PygameView:
 
         self.trade_give_rects = {}
         self.trade_get_rects = {}
+
+        self.menu_player_buttons = {
+            2: pygame.Rect(self.width // 2 - 130, 280, 80, 44),
+            3: pygame.Rect(self.width // 2 - 40, 280, 80, 44),
+            4: pygame.Rect(self.width // 2 + 50, 280, 80, 44),
+        }
+
+        self.menu_buttons = {
+            "start_human": pygame.Rect(self.width // 2 - 120, 360, 240, 50),
+            "start_ai": pygame.Rect(self.width // 2 - 120, 430, 240, 50),
+            "quit": pygame.Rect(self.width // 2 - 120, 500, 240, 50),
+        }
+
+        self.menu_selected_players = 3
 
         # --- TRADE PANEL ---
         start_x = 1035
@@ -131,12 +149,6 @@ class PygameView:
         modal_button_w = 48
         modal_button_h = 48
         modal_gap = 14
-
-        self.menu_buttons = {
-            "start_human": pygame.Rect(self.width // 2 - 120, 260, 240, 50),
-            "start_ai": pygame.Rect(self.width // 2 - 120, 330, 240, 50),
-            "quit": pygame.Rect(self.width // 2 - 120, 400, 240, 50),
-        }
 
         for i, resource in enumerate(TRADE_RESOURCES):
             x = modal_start_x + i * (modal_button_w + modal_gap)
@@ -280,8 +292,11 @@ class PygameView:
             return None
         if self.restart_button_rect.collidepoint(mouse_pos):
             return "restart"
+        if self.menu_button_rect.collidepoint(mouse_pos):
+            print("Menu button clicked")
+            return "menu"
         if self.info_button_rect.collidepoint(mouse_pos):
-            return "info"        
+            return "info"
         if self.roll_button_rect.collidepoint(mouse_pos):
             return "roll"
         if self.end_turn_button_rect.collidepoint(mouse_pos):
@@ -298,10 +313,14 @@ class PygameView:
             return "play_year_of_plenty"
         if self.play_monopoly_rect.collidepoint(mouse_pos):
             return "play_monopoly"
-        for name, rect in self.menu_buttons.items():
-            if rect.collidepoint(mouse_pos):
-                return name
-        return None
+        if self.in_menu:
+            for num_players, rect in self.menu_player_buttons.items():
+                if rect.collidepoint(mouse_pos):
+                    return f"players_{num_players}"
+
+            for name, rect in self.menu_buttons.items():
+                if rect.collidepoint(mouse_pos):
+                    return name
 
     def legal_targets(self, state, action_type):
         result = []
@@ -319,23 +338,43 @@ class PygameView:
         pressed = self.pressed_button
         self.pressed_button = None
 
-        if pressed == "start_human":
-            return "START_HUMAN"
-
-        if pressed == "start_ai":
-            return "START_AI"
-
-        if pressed == "quit":
-            return "QUIT"
-
         if pressed is None or released_on != pressed:
             return None
 
+        # akcje menu tylko wtedy, gdy state is None
+        if state is None:
+            if pressed == "players_2":
+                self.menu_selected_players = 2
+                return "MENU_UPDATED"
+
+            if pressed == "players_3":
+                self.menu_selected_players = 3
+                return "MENU_UPDATED"
+
+            if pressed == "players_4":
+                self.menu_selected_players = 4
+                return "MENU_UPDATED"
+
+            if pressed == "start_human":
+                return "START_HUMAN"
+
+            if pressed == "start_ai":
+                return "START_AI"
+
+            if pressed == "quit":
+                return "QUIT"
+
+            return None
+        # dalej: normalna gra
         if pressed == "restart":
             return "RESTART"
+        if pressed == "menu":
+            return "MENU"
+
 
         if pressed == "info":
             self.help_tab = "ui"
+            self.help_page = 0
             self.open_modal("help")
             return state
 
@@ -352,11 +391,6 @@ class PygameView:
         if pressed == "play_knight":
             if self.has_action_type(state, ActionType.PLAY_KNIGHT):
                 return state.apply(Action(ActionType.PLAY_KNIGHT))
-            return state
-
-        if pressed == "end_turn":
-            if self.has_action_type(state, ActionType.END_TURN):
-                return state.apply(Action(ActionType.END_TURN))
             return state
 
         if pressed == "play_road_building":
@@ -378,6 +412,11 @@ class PygameView:
             if self.has_action_type(state, ActionType.PLAY_MONOPOLY):
                 self.pending_card_action = "monopoly"
                 self.open_modal("choose_one_resource", selected_resource=None)
+            return state
+
+        if pressed == "end_turn":
+            if self.has_action_type(state, ActionType.END_TURN):
+                return state.apply(Action(ActionType.END_TURN))
             return state
 
         if pressed == "trade":
@@ -405,26 +444,47 @@ class PygameView:
     def get_clicked_hex(self, state, mouse_pos, radius=55):
         mx, my = mouse_pos
 
-        for hex_id, center in enumerate(state.board.hex_centers):
+        legal_hex_ids = set()
+        for action in state.legal_actions():
+            if action.type == ActionType.MOVE_ROBBER and action.target is not None:
+                legal_hex_ids.add(action.target)
+
+        best_hex = None
+        best_dist_sq = radius * radius
+
+        for hex_id in legal_hex_ids:
+            center = state.board.hex_centers[hex_id]
             sx, sy = self.world_to_screen(center)
             dist_sq = (sx - mx) ** 2 + (sy - my) ** 2
 
-            if dist_sq <= radius ** 2:
-                return hex_id
+            if dist_sq <= best_dist_sq:
+                best_dist_sq = dist_sq
+                best_hex = hex_id
 
-        return None
+        return best_hex
 
-    def get_clicked_vertex(self, state, mouse_pos, radius=18):
+    def get_clicked_vertex(self, state, mouse_pos, radius=26):
         mx, my = mouse_pos
 
-        for vertex_id, pos in enumerate(state.board.vertex_positions):
+        legal_vertex_ids = set()
+        for action in state.legal_actions():
+            if action.type in (ActionType.BUILD_SETTLEMENT, ActionType.BUILD_CITY):
+                if action.target is not None:
+                    legal_vertex_ids.add(action.target)
+
+        best_vertex = None
+        best_dist_sq = radius * radius
+
+        for vertex_id in legal_vertex_ids:
+            pos = state.board.vertex_positions[vertex_id]
             sx, sy = self.world_to_screen(pos)
             dist_sq = (sx - mx) ** 2 + (sy - my) ** 2
 
-            if dist_sq <= radius ** 2:
-                return vertex_id
+            if dist_sq <= best_dist_sq:
+                best_dist_sq = dist_sq
+                best_vertex = vertex_id
 
-        return None
+        return best_vertex
 
     def point_line_distance(self, p, a, b):
         # odległość punktu p od odcinka ab
@@ -447,38 +507,63 @@ class PygameView:
         return math.hypot(px - proj_x, py - proj_y)
 
 
-    def get_clicked_edge(self, state, mouse_pos, threshold=14):
+    def get_clicked_edge(self, state, mouse_pos, threshold=20):
         mx, my = mouse_pos
 
-        for edge_id, (a, b) in enumerate(state.board.edges):
+        legal_edge_ids = set()
+        for action in state.legal_actions():
+            if action.type == ActionType.BUILD_ROAD and action.target is not None:
+                legal_edge_ids.add(action.target)
+
+        best_edge = None
+        best_dist = threshold
+
+        for edge_id in legal_edge_ids:
+            a, b = state.board.edges[edge_id]
             pa = self.world_to_screen(state.board.vertex_positions[a])
             pb = self.world_to_screen(state.board.vertex_positions[b])
 
             dist = self.point_line_distance((mx, my), pa, pb)
 
-            if dist <= threshold:
-                return edge_id
+            if dist <= best_dist:
+                best_dist = dist
+                best_edge = edge_id
 
-        return None
+        return best_edge
     
     def get_status_text(self, state):
         if state.is_terminal():
-            p0 = state.victory_points(0)
-            p1 = state.victory_points(1)
+            scores = [state.victory_points(pid) for pid in range(len(state.players))]
+            best_score = max(scores)
+            winners = [pid for pid, score in enumerate(scores) if score == best_score]
 
-            if p0 > p1:
-                return "Koniec gry - Gracz 0 Wygrywa"
-            elif p1 > p0:
-                return "Koniec gry - Gracz 1 Wygrywa"
-            else:
-                return "Koniec gry - Remis"
+            if len(winners) == 1:
+                return f"Koniec gry"
+            return "Koniec gry - Remis"
 
-        if state.current_player == 1:
-            return "AI Myśli..." 
+        if state.phase == "SETUP_SETTLEMENT_1":
+            return "Umieść pierwszą osadę"
 
-        # gracz
-        if state.phase in ("ROBBER", "ROBBER_FROM_KNIGHT"):
+        if state.phase == "SETUP_ROAD_1":
+            return "Umieść pierwszą drogę"
+
+        if state.phase == "SETUP_SETTLEMENT_2":
+            return "Umieść drugą osadę"
+
+        if state.phase == "SETUP_ROAD_2":
+            return "Umieść drugą drogę"
+
+        if state.phase == "ROBBER":
             return "Przesuń złodzieja"
+
+        if state.phase == "ROBBER_FROM_KNIGHT":
+            return "Przesuń złodzieja (rycerz)"
+
+        if state.phase == "STEAL_PLAYER":
+            return "Wybierz gracza"
+
+        if state.current_player != 0:
+            return "AI myśli..."
 
         if not state.dice_rolled:
             return "Rzuć kośćmi"
@@ -539,6 +624,14 @@ class PygameView:
                         "type": "confirmed_two_resources",
                         "resources": [r1, r2],
                     }
+                
+            elif self.active_modal == "choose_steal_target":
+                selected_target = self.modal_data.get("selected_target")
+                if selected_target is not None:
+                    return {
+                        "type": "confirmed_steal_target",
+                        "target_player": selected_target,
+                    }
 
         for resource, rect in self.modal_resource_rects_row1.items():
             if rect.collidepoint(mouse_pos):
@@ -554,6 +647,12 @@ class PygameView:
             if rect.collidepoint(mouse_pos):
                 if self.active_modal == "choose_two_resources":
                     self.modal_data["selected_resource_2"] = resource
+                    return "updated"
+
+        if self.active_modal == "choose_steal_target":
+            for pid, rect in self.steal_target_rects.items():
+                if rect.collidepoint(mouse_pos):
+                    self.modal_data["selected_target"] = pid
                     return "updated"
 
         return "modal_open"
@@ -615,11 +714,6 @@ class PygameView:
                 return state
 
         return None
-
-    def is_button_pressed(self, name):
-        now = pygame.time.get_ticks()
-        return self.button_pressed_until.get(name, 0) > now
-
 
     def world_to_screen(self, point, scale=85, offset_x=700, offset_y=380):
         x, y = point
@@ -709,6 +803,9 @@ class PygameView:
         elif self.active_modal == "choose_two_resources":
             self.draw_choose_two_resources_modal()
 
+        elif self.active_modal == "choose_steal_target":
+            self.draw_choose_steal_target_modal()
+
         elif self.active_modal == "help":
             self.draw_help_modal()
 
@@ -745,6 +842,48 @@ class PygameView:
                 self.draw_help_rules_page_1()
             else:
                 self.draw_help_rules_page_2()
+
+    def draw_choose_steal_target_modal(self):
+        modal_rect = self.card_modal_rect
+
+        title = self.font_medium.render("Wybierz gracza do okradzenia", True, TEXT_COLOR)
+        self.screen.blit(title, (modal_rect.x + 20, modal_rect.y + 20))
+
+        subtitle = self.font_small.render("Kliknij przeciwnika, od którego chcesz ukraść losowy surowiec.", True, TEXT_COLOR)
+        self.screen.blit(subtitle, (modal_rect.x + 20, modal_rect.y + 60))
+
+        self.steal_target_rects = {}
+
+        targets = self.modal_data.get("steal_targets", [])
+        selected_target = self.modal_data.get("selected_target")
+
+        start_x = modal_rect.x + 40
+        y = modal_rect.y + 120
+        button_w = 120
+        button_h = 46
+        gap = 18
+
+        for i, pid in enumerate(targets):
+            rect = pygame.Rect(start_x + i * (button_w + gap), y, button_w, button_h)
+            self.steal_target_rects[pid] = rect
+
+            self.draw_button(
+                rect,
+                f"Gracz {pid}",
+                enabled=True,
+                hovered=False,
+                pressed=(selected_target == pid),
+            )
+
+        confirm_enabled = selected_target is not None
+
+        self.draw_primary_button(
+            self.modal_confirm_rect,
+            "Potwierdź",
+            enabled=confirm_enabled,
+            hovered=(self.hovered_button == "modal_confirm"),
+            pressed=(self.pressed_button == "modal_confirm"),
+        )
 
     def draw_tab(self, rect, text, active):
         color = PANEL_BG if active else BUTTON_BG
@@ -1038,36 +1177,6 @@ class PygameView:
 
         self.draw_help_text_block(lines)
 
-    def draw_help_text_block(self, lines, start_x, start_y):
-        y = start_y
-
-        headers = {
-            "Cel gry",
-            "Punkty zwycięstwa",
-            "Przebieg tury",
-            "Produkcja",
-            "Produkcja surowców",
-            "Złodziej",
-            "Budowa",
-            "Handel",
-            "Karty rozwoju",
-            "Jak zdobywa się punkty",
-        }
-
-        for line in lines:
-            if line == "":
-                y += 10
-                continue
-
-            if line in headers:
-                txt = self.font_medium.render(line, True, TEXT_COLOR)
-                self.screen.blit(txt, (start_x, y))
-                y += 28
-            else:
-                txt = self.font_small.render(line, True, TEXT_COLOR)
-                self.screen.blit(txt, (start_x, y))
-                y += 22
-
     def draw_help_text(self, lines, start_x, start_y):
         y = start_y
 
@@ -1307,8 +1416,12 @@ class PygameView:
         rect = pygame.Rect(1030, 820, 330, 220)
         self.draw_panel(rect, "Handel z bankiem")
 
+        is_human_turn = (state.current_player == 0)
+        player = state.players[0]
+
+        # kurs licz zawsze dla gracza 0
         if self.selected_give_resource is not None:
-            ratio = rules.get_player_trade_ratio(state, state.current_player, self.selected_give_resource)
+            ratio = rules.get_player_trade_ratio(state, 0, self.selected_give_resource)
             ratio_txt = self.font_small.render(f"Aktualny kurs: {ratio}:1", True, TEXT_COLOR)
             self.screen.blit(ratio_txt, (rect.x + 14, rect.y + 28))
 
@@ -1318,11 +1431,9 @@ class PygameView:
         take_label = self.font_small.render("  Weź :", True, TEXT_COLOR)
         self.screen.blit(take_label, (rect.x + 14, rect.y + 110))
 
-        current_player = state.players[state.current_player]
-
         for resource, button_rect in self.trade_give_rects.items():
             selected = (self.selected_give_resource == resource)
-            enabled = current_player.resources[resource] >= 4 and self.has_action_type(state, ActionType.END_TURN)
+            enabled = is_human_turn and player.resources[resource] >= 4 and self.has_action_type(state, ActionType.END_TURN)
 
             self.draw_resource_button(
                 button_rect,
@@ -1333,7 +1444,7 @@ class PygameView:
 
         for resource, button_rect in self.trade_get_rects.items():
             selected = (self.selected_get_resource == resource)
-            enabled = self.has_action_type(state, ActionType.END_TURN)
+            enabled = is_human_turn and self.has_action_type(state, ActionType.END_TURN)
 
             self.draw_resource_button(
                 button_rect,
@@ -1343,7 +1454,7 @@ class PygameView:
             )
 
         trade_enabled = False
-        if self.selected_give_resource is not None and self.selected_get_resource is not None:
+        if is_human_turn and self.selected_give_resource is not None and self.selected_get_resource is not None:
             if self.selected_give_resource != self.selected_get_resource:
                 trade_enabled = any(
                     a.type == ActionType.TRADE_BANK
@@ -1473,9 +1584,11 @@ class PygameView:
         self.screen.blit(label, label_rect)
 
     def draw_buttons(self, state):
-        roll_enabled = self.has_action_type(state, ActionType.ROLL_DICE)
-        end_enabled = self.has_action_type(state, ActionType.END_TURN)
-        buy_dev_enabled = self.has_action_type(state, ActionType.BUY_DEVELOPMENT_CARD)
+        is_human_turn = (state.current_player == 0)
+
+        roll_enabled = is_human_turn and self.has_action_type(state, ActionType.ROLL_DICE)
+        end_enabled = is_human_turn and self.has_action_type(state, ActionType.END_TURN)
+        buy_dev_enabled = is_human_turn and self.has_action_type(state, ActionType.BUY_DEVELOPMENT_CARD)
 
         self.draw_button(
             self.buy_dev_card_rect,
@@ -1595,7 +1708,6 @@ class PygameView:
         self.screen.blit(status_label, (rect.x + 14, rect.y + 16))
 
         info_lines = [
-            f"Faza: {state.phase}",
             f"Aktywny gracz: {state.current_player}",
             f"Ostatni rzut: {state.last_roll}",
         ]
@@ -1624,86 +1736,74 @@ class PygameView:
             y += 40
 
     def draw_players_panel(self, state):
-        # ---------- AI / Gracz 1 ----------
-        ai_rect = pygame.Rect(30, 30, 250, 150)
-        self.draw_panel(ai_rect, "Gracz 1")
+        self.player_panel_rects = {}
+        panel_x = 30
+        panel_w = 250
+        panel_h = 150
+        top_start_y = 30
+        top_spacing = 20
 
-        ai_color = PLAYER_COLORS[1]
-        pygame.draw.circle(self.screen, ai_color, (ai_rect.x + 210, ai_rect.y + 20), 8)
+        human_player_id = 0
 
-        ai_player = state.players[1]
-        ai_vp = state.victory_points(1)
+        def draw_single_player_panel(pid, rect):
+            self.player_panel_rects[pid] = rect
+            player = state.players[pid]
+            self.draw_panel(rect, f"Gracz {pid}")
 
-        x0 = ai_rect.x + 14
-        y0 = ai_rect.y + 42
+            color = PLAYER_COLORS[pid % len(PLAYER_COLORS)]
+            pygame.draw.circle(self.screen, color, (rect.x + 210, rect.y + 20), 8)
 
-        vp_txt = self.font_small.render(f"PZ: {ai_vp}", True, TEXT_COLOR)
-        self.screen.blit(vp_txt, (x0, y0))
+            # podświetlenie aktywnego gracza
+            if pid == state.current_player:
+                pygame.draw.rect(self.screen, (245, 210, 90), rect, 3, border_radius=14)
 
-        # rząd 2: osady / miasta / drogi
-        y_icons_1 = y0 + 30
-        x = x0
-        row1 = [
-            ("settlement", len(ai_player.settlements)),
-            ("city", len(ai_player.cities)),
-            ("road", len(ai_player.roads)),
-        ]
-        for item, amount in row1:
-            self.draw_icon_with_count(item, x, y_icons_1, amount)
-            x += 72
+            if state.phase == "STEAL_PLAYER" and pid in getattr(state, "steal_targets", []):
+                pygame.draw.rect(self.screen, (255, 255, 0), rect, 4, border_radius=14)
 
-        # rząd 3: rycerze / władza / droga handlowa
-        y_icons_2 = y_icons_1 + 40
-        x = x0
-        row2 = [
-            ("knight", ai_player.played_knights),
-            ("nwr", 1 if state.largest_army_owner == 1 else 0),
-            ("ndh", state.longest_road_length if state.longest_road_owner == 1 else 0),
-        ]
-        for item, amount in row2:
-            self.draw_icon_with_count(item, x, y_icons_2, amount)
-            x += 72
+            vp = state.victory_points(pid)
 
-        # ---------- Człowiek / Gracz 0 ----------
-        human_rect = pygame.Rect(30, 900, 250, 150)
-        self.draw_panel(human_rect, "Gracz 0")
+            x0 = rect.x + 14
+            y0 = rect.y + 42
 
-        human_color = PLAYER_COLORS[0]
-        pygame.draw.circle(self.screen, human_color, (human_rect.x + 210, human_rect.y + 20), 8)
+            vp_txt = self.font_small.render(f"PZ: {vp}", True, TEXT_COLOR)
+            self.screen.blit(vp_txt, (x0, y0))
 
-        human_player = state.players[0]
-        human_vp = state.victory_points(0)
 
-        x0 = human_rect.x + 14
-        y0 = human_rect.y + 42
+            # rząd 1: osady / miasta / drogi
+            y_icons_1 = y0 + 30
+            x = x0
+            row1 = [
+                ("settlement", len(player.settlements)),
+                ("city", len(player.cities)),
+                ("road", len(player.roads)),
+            ]
+            for item, amount in row1:
+                self.draw_icon_with_count(item, x, y_icons_1, amount)
+                x += 72
 
-        vp_txt = self.font_small.render(f"PZ: {human_vp}", True, TEXT_COLOR)
-        self.screen.blit(vp_txt, (x0, y0))
+            # rząd 2: rycerze / władza / droga handlowa
+            y_icons_2 = y_icons_1 + 40
+            x = x0
+            row2 = [
+                ("knight", player.played_knights),
+                ("nwr", "2pz" if state.largest_army_owner == pid else 0),
+                ("ndh", "2pz" if state.longest_road_owner == pid else 0),
+            ]
+            
+            for item, amount in row2:
+                self.draw_icon_with_count(item, x, y_icons_2, amount)
+                x += 72
 
-        # rząd 2: osady / miasta / drogi
-        y_icons_1 = y0 + 30
-        x = x0
-        row1 = [
-            ("settlement", len(human_player.settlements)),
-            ("city", len(human_player.cities)),
-            ("road", len(human_player.roads)),
-        ]
-        for item, amount in row1:
-            self.draw_icon_with_count(item, x, y_icons_1, amount)
-            x += 72
+        # przeciwnicy od góry
+        enemy_ids = [pid for pid in range(len(state.players)) if pid != human_player_id]
+        for i, pid in enumerate(enemy_ids):
+            y = top_start_y + i * (panel_h + top_spacing)
+            rect = pygame.Rect(panel_x, y, panel_w, panel_h)
+            draw_single_player_panel(pid, rect)
 
-        # rząd 3: rycerze / władza / droga handlowa
-        y_icons_2 = y_icons_1 + 40
-        x = x0
-        row2 = [
-            ("knight", human_player.played_knights),
-            ("nwr", 1 if state.largest_army_owner == 0 else 0),
-            ("ndh", state.longest_road_length if state.longest_road_owner == 0 else 0),
-        ]
-        
-        for item, amount in row2:
-            self.draw_icon_with_count(item, x, y_icons_2, amount)
-            x += 72
+        # gracz główny na dole
+        human_rect = pygame.Rect(panel_x, 900, panel_w, panel_h)
+        draw_single_player_panel(human_player_id, human_rect)
 
     def draw_icon_with_count(self, icon_name, x, y, count):
         icon = self.ui_icons.get(icon_name)
@@ -1768,7 +1868,7 @@ class PygameView:
                 pygame.draw.line(self.screen, HIGHLIGHT_EDGE, pa, pb, 4)
 
     def draw_action_log(self, state):
-        rect = pygame.Rect(30, 690, 250, 200)
+        rect = pygame.Rect(30, 690, 260, 200)
         self.draw_panel(rect, "Historia akcji")
 
         log_lines = state.action_log[-7:]  # ostatnie 7 wpisów
@@ -1783,10 +1883,23 @@ class PygameView:
         self.screen.fill(BACKGROUND)
 
         title = self.font_large.render("CATAN", True, TEXT_COLOR)
-        self.screen.blit(title, title.get_rect(center=(self.width // 2, 150)))
+        self.screen.blit(title, title.get_rect(center=(self.width // 2, 120)))
 
         subtitle = self.font_small.render("Wersja Python + AI", True, TEXT_COLOR)
-        self.screen.blit(subtitle, subtitle.get_rect(center=(self.width // 2, 190)))
+        self.screen.blit(subtitle, subtitle.get_rect(center=(self.width // 2, 160)))
+
+        players_label = self.font_medium.render("Liczba graczy", True, TEXT_COLOR)
+        self.screen.blit(players_label, players_label.get_rect(center=(self.width // 2, 220)))
+
+        for num_players, rect in self.menu_player_buttons.items():
+            selected = (self.menu_selected_players == num_players)
+            self.draw_button(
+                rect,
+                str(num_players),
+                enabled=True,
+                hovered=(self.hovered_button == f"players_{num_players}"),
+                pressed=(self.pressed_button == f"players_{num_players}") or selected,
+            )
 
         self.draw_button(
             self.menu_buttons["start_human"],
@@ -1812,19 +1925,25 @@ class PygameView:
             self.pressed_button == "quit",
         )
 
+        info = self.font_small.render(
+            f"Wybrano: {self.menu_selected_players} graczy",
+            True,
+            TEXT_COLOR,
+        )
+        self.screen.blit(info, info.get_rect(center=(self.width // 2, 570)))
+
         pygame.display.flip()
 
     def draw_game_over(self, state):
         if not state.is_terminal():
             return
 
-        p0 = state.victory_points(0)
-        p1 = state.victory_points(1)
+        scores = [state.victory_points(pid) for pid in range(len(state.players))]
+        best_score = max(scores)
+        winners = [pid for pid, score in enumerate(scores) if score == best_score]
 
-        if p0 > p1:
-            text = "Koniec gry - Gracz 0 wygrywa"
-        elif p1 > p0:
-            text = "Koniec gry - Gracz 1 wygrywa"
+        if len(winners) == 1:
+            text = f"Koniec gry - Gracz {winners[0]} wygrywa"
         else:
             text = "Koniec gry - Remis"
 
@@ -1832,7 +1951,7 @@ class PygameView:
         overlay.fill((0, 0, 0, 110))
         self.screen.blit(overlay, (0, 0))
 
-        panel_rect = pygame.Rect(self.width // 2 - 230, 40, 460, 140)
+        panel_rect = pygame.Rect(self.width // 2 - 260, 40, 520, 160)
         pygame.draw.rect(self.screen, PANEL_BG, panel_rect, border_radius=16)
         pygame.draw.rect(self.screen, PANEL_BORDER, panel_rect, 3, border_radius=16)
 
@@ -1840,8 +1959,9 @@ class PygameView:
         rect = label.get_rect(center=(self.width // 2, 80))
         self.screen.blit(label, rect)
 
-        score_text = self.font_medium.render(f"PZ: {p0} - {p1}", True, TEXT_COLOR)
-        score_rect = score_text.get_rect(center=(self.width // 2, 120))
+        score_str = "  ".join(f"P{pid}: {score}" for pid, score in enumerate(scores))
+        score_text = self.font_small.render(score_str, True, TEXT_COLOR)
+        score_rect = score_text.get_rect(center=(self.width // 2, 125))
         self.screen.blit(score_text, score_rect)
 
         self.draw_button(
@@ -1850,6 +1970,14 @@ class PygameView:
             enabled=True,
             hovered=(self.hovered_button == "restart"),
             pressed=(self.pressed_button == "restart"),
+        )
+
+        self.draw_button(
+            self.menu_button_rect,
+            "Menu",
+            enabled=True,
+            hovered=(self.hovered_button == "menu"),
+            pressed=(self.pressed_button == "menu"),
         )
 
     def draw(self, state):
